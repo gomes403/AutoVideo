@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { GoogleGenAI, Type, Modality } from "@google/genai";
+import { QwenGenAI, Type, Modality } from "@qwen/genai";
 import { 
   Clapperboard, 
   FileText, 
@@ -371,13 +371,13 @@ const renderVideoInBrowser = async (scenes: Scene[], musicUrl: string | undefine
   });
 };
 
-// --- GEMINI INTEGRATION ---
+// --- QWEN INTEGRATION ---
 
 // We will instantiate this dynamically to ensure latest key is used
-let ai: GoogleGenAI;
+let ai: QwenGenAI;
 
 const initAI = () => {
-  ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  ai = new QwenGenAI({ apiKey: process.env.API_KEY });
 }
 // Init immediately for first load
 initAI();
@@ -418,7 +418,7 @@ const generateScript = async (topic: string, duration: string): Promise<any> => 
   while (attempts < 3) {
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'qwen-2.5',
         contents: systemPrompt,
         config: { responseMimeType: "application/json" }
       });
@@ -444,7 +444,7 @@ const generateScript = async (topic: string, duration: string): Promise<any> => 
 const generateSceneAssetAudio = async (text: string): Promise<string> => {
     initAI();
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
+      model: "qwen-2.5-tts",
       contents: [{ parts: [{ text: text }] }],
       config: {
         responseModalities: [Modality.AUDIO],
@@ -456,12 +456,12 @@ const generateSceneAssetAudio = async (text: string): Promise<string> => {
     return pcmToWav(base64Audio, 24000); 
 };
 
-// Use Gemini Flash for Image Generation (Free-tier friendly)
+// Use Qwen 2.5 for Image Generation (Free-tier friendly)
 const generateSceneVisualKeyframe = async (prompt: string): Promise<string> => {
   initAI();
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image', 
+      model: 'qwen-2.5-image', 
       contents: { parts: [{ text: prompt + ", cinematic lighting, 8k, photorealistic, highly detailed" }] },
     });
     const base64Image = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
@@ -779,7 +779,7 @@ const App = () => {
                     Imagine, <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-500">Gere</span>, Assista.
                   </h1>
                   <p className="text-zinc-400 text-lg md:text-xl max-w-2xl mx-auto font-light">
-                    Agora com <span className="text-blue-400 font-semibold">Gemini Flash</span> para geração ultra-rápida e gratuita.
+                    Agora com <span className="text-blue-400 font-semibold">Qwen 2.5</span> para geração ultra-rápida e gratuita.
                   </p>
                 </div>
 
@@ -932,7 +932,7 @@ const App = () => {
                     <div className="space-y-6 relative ml-2">
                       <div className="absolute left-[15px] top-3 bottom-3 w-0.5 bg-zinc-800/50 -z-10"></div>
                       <StepIcon step="idle" current={project.status} label="Roteiro & Ideia" subLabel="Planejamento" />
-                      <StepIcon step="scripting" current={project.status} label="Geração de Clipes" subLabel="Gemini Flash 2.5" />
+                      <StepIcon step="scripting" current={project.status} label="Geração de Clipes" subLabel="Qwen 2.5" />
                       <StepIcon step="review_script" current={project.status} label="Narração Neural" subLabel="Áudio TTS" />
                       <StepIcon step="producing" current={project.status} label="Montagem" subLabel="Renderização" />
                       <StepIcon step="completed" current={project.status} label="Finalizado" subLabel="Pronto para uso" />
