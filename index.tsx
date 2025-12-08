@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { 
   Clapperboard, 
   FileText, 
@@ -14,18 +14,67 @@ import {
   Download, 
   Settings, 
   Cpu, 
-  Loader2,
+  Loader2, 
   RefreshCw,
-  Copy
+  Copy,
+  Wand2,
+  PlayCircle,
+  PauseCircle,
+  SkipForward,
+  Share2,
+  Lock,
+  X,
+  Plus,
+  Music,
+  ChevronDown,
+  ArrowRight,
+  Sparkles,
+  LayoutTemplate,
+  Clock,
+  Zap,
+  Check,
+  Video,
+  Layers,
+  MoreHorizontal
 } from 'lucide-react';
 
+// --- CONSTANTS ---
+
+const MUSIC_LIBRARY = [
+  { id: 'none', name: 'Sem Música', url: '' },
+  { id: 'ambient', name: 'Chill Ambient', url: 'https://cdn.pixabay.com/audio/2022/05/27/audio_1808fbf07a.mp3' },
+  { id: 'upbeat', name: 'Tech Corporate', url: 'https://cdn.pixabay.com/audio/2024/01/16/audio_e2b992254f.mp3' },
+  { id: 'cinematic', name: 'Cinematic Drama', url: 'https://cdn.pixabay.com/audio/2022/03/24/audio_07806f1562.mp3' }
+];
+
+const POPULAR_IDEAS = [
+  { label: "Curiosidades Históricas", icon: "📜", img: "https://images.unsplash.com/photo-1461360370896-922624d12aa1?w=800&q=80" },
+  { label: "Marketing Digital", icon: "🚀", img: "https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=800&q=80" },
+  { label: "Conto de Terror", icon: "👻", img: "https://images.unsplash.com/photo-1505635552518-3448ff116af3?w=800&q=80" },
+  { label: "Meditação Guiada", icon: "🧘", img: "https://images.unsplash.com/photo-1506126613408-eca07ce68773?w=800&q=80" },
+  { label: "Review de Tecnologia", icon: "💻", img: "https://images.unsplash.com/photo-1518770660439-4636190af475?w=800&q=80" }
+];
+
+const INSPIRATION_EXAMPLES = [
+  { title: "O Mistério das Pirâmides", style: "Documentário", img: "https://images.unsplash.com/photo-1503177119275-0aa32b3a9368?w=800&q=80" },
+  { title: "Futuro da IA", style: "Tech", img: "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?w=800&q=80" },
+  { title: "Café da Manhã", style: "Lifestyle", img: "https://images.unsplash.com/photo-1493770348161-369560ae357d?w=800&q=80" },
+  { title: "Viagem Espacial", style: "Cinematic", img: "https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?w=800&q=80" }
+];
+
 // --- TYPES ---
+
+type CameraMovement = 'zoom_in' | 'zoom_out' | 'pan_left' | 'pan_right' | 'tilt_up' | 'static';
 
 type Scene = {
   id: number;
   visual_prompt: string;
   narration: string;
   duration_est: number;
+  status: 'pending' | 'generating_audio' | 'generating_visual' | 'completed' | 'error';
+  audioUrl?: string;
+  imageUrl?: string; 
+  movement: CameraMovement; 
 };
 
 type VideoProject = {
@@ -34,608 +83,1027 @@ type VideoProject = {
   tags: string[];
   scenes: Scene[];
   topic: string;
-  status: 'idle' | 'scripting' | 'review_script' | 'planning_media' | 'ready_for_code';
+  status: 'idle' | 'scripting' | 'review_script' | 'producing' | 'completed';
+  videoBlob?: Blob;
+  backgroundMusicUrl?: string;
+};
+
+// --- HELPERS ---
+
+const writeString = (view: DataView, offset: number, string: string) => {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i));
+  }
+};
+
+const pcmToWav = (base64PCM: string, sampleRate: number = 24000) => {
+  const binaryString = atob(base64PCM);
+  const len = binaryString.length;
+  const buffer = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    buffer[i] = binaryString.charCodeAt(i);
+  }
+
+  const wavHeader = new ArrayBuffer(44);
+  const view = new DataView(wavHeader);
+
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + len, true);
+  writeString(view, 8, 'WAVE');
+
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+
+  writeString(view, 36, 'data');
+  view.setUint32(40, len, true);
+
+  const blob = new Blob([view, buffer], { type: 'audio/wav' });
+  return URL.createObjectURL(blob);
+};
+
+// --- VIDEO RENDERING ENGINE (Browser-side) ---
+
+const getSupportedMimeType = () => {
+  const types = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+    'video/mp4'
+  ];
+  for (const type of types) {
+    if (MediaRecorder.isTypeSupported(type)) {
+        return type;
+    }
+  }
+  return ''; 
+};
+
+// Advanced Motion Engine to simulate Video Clips
+const drawSceneFrame = (
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement | null,
+  movement: CameraMovement,
+  narration: string,
+  progress: number, // 0.0 to 1.0
+  globalAlpha: number
+) => {
+  ctx.globalAlpha = globalAlpha;
+  const width = ctx.canvas.width;
+  const height = ctx.canvas.height;
+
+  if (img) {
+    // Determine scale and offset based on movement type
+    const sw = img.naturalWidth;
+    const sh = img.naturalHeight;
+    const baseScale = Math.max(width / sw, height / sh); // Cover scale
+    
+    let scale = baseScale;
+    let tx = 0;
+    let ty = 0;
+    
+    // Linear is often better for continuous video feel
+    const p = progress; 
+
+    switch (movement) {
+      case 'zoom_in':
+        scale = baseScale * (1.0 + (p * 0.15)); // Zoom 1.0 -> 1.15
+        tx = (width - sw * scale) / 2;
+        ty = (height - sh * scale) / 2;
+        break;
+      case 'zoom_out':
+        scale = baseScale * (1.15 - (p * 0.15)); // Zoom 1.15 -> 1.0
+        tx = (width - sw * scale) / 2;
+        ty = (height - sh * scale) / 2;
+        break;
+      case 'pan_left':
+        scale = baseScale * 1.1; // Slight zoom to allow panning
+        const maxPanX_L = (sw * scale) - width;
+        tx = -(maxPanX_L * p); // Move Left
+        ty = (height - sh * scale) / 2;
+        break;
+      case 'pan_right':
+        scale = baseScale * 1.1;
+        const maxPanX_R = (sw * scale) - width;
+        tx = -maxPanX_R + (maxPanX_R * p); // Start Left, Move Right
+        ty = (height - sh * scale) / 2;
+        break;
+      case 'tilt_up':
+        scale = baseScale * 1.1;
+        const maxPanY = (sh * scale) - height;
+        tx = (width - sw * scale) / 2;
+        ty = -maxPanY + (maxPanY * p); // Start Low, Move Up
+        break;
+      default:
+        scale = baseScale * 1.05; 
+        tx = (width - sw * scale) / 2;
+        ty = (height - sh * scale) / 2;
+        break;
+    }
+
+    ctx.drawImage(img, tx, ty, sw * scale, sh * scale);
+  } else {
+    // Fallback
+    ctx.fillStyle = "#18181b";
+    ctx.fillRect(0, 0, width, height);
+  }
+};
+
+// Helper to preload assets (Images & Audio)
+const preloadAssets = async (scenes: Scene[], musicUrl: string | undefined, audioCtx: AudioContext) => {
+  // Load Scene Images
+  const imagesPromise = scenes.map(async (scene) => {
+      if (!scene.imageUrl) return null;
+      try {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          img.src = scene.imageUrl;
+          await new Promise((resolve) => {
+              img.onload = resolve;
+              img.onerror = resolve;
+          });
+          return img;
+      } catch { return null; }
+  });
+
+  // Load Scene Audio (Voiceovers)
+  const audioPromise = scenes.map(async (scene) => {
+      if (!scene.audioUrl) return null;
+      try {
+          const response = await fetch(scene.audioUrl);
+          const arrayBuffer = await response.arrayBuffer();
+          return await audioCtx.decodeAudioData(arrayBuffer);
+      } catch { return null; }
+  });
+
+  // Load Background Music
+  let musicBuffer: AudioBuffer | null = null;
+  if (musicUrl) {
+    try {
+        const response = await fetch(musicUrl);
+        const arrayBuffer = await response.arrayBuffer();
+        musicBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    } catch (e) {
+        console.warn("Failed to load background music", e);
+    }
+  }
+
+  const [images, audioBuffers] = await Promise.all([
+      Promise.all(imagesPromise),
+      Promise.all(audioPromise)
+  ]);
+  
+  return { images, audioBuffers, musicBuffer };
+};
+
+const renderVideoInBrowser = async (scenes: Scene[], musicUrl: string | undefined, onProgress: (p: number) => void): Promise<Blob> => {
+  console.log("Starting final montage (Flash Engine)...");
+  
+  const canvas = document.createElement('canvas');
+  canvas.width = 1280; // 720p HD
+  canvas.height = 720;
+  
+  const ctx = canvas.getContext('2d', { alpha: false });
+  if (!ctx) throw new Error("Could not get canvas context");
+
+  // Setup Audio
+  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+  const audioCtx = new AudioContextClass();
+  const dest = audioCtx.createMediaStreamDestination();
+  
+  try { if (audioCtx.state === 'suspended') await audioCtx.resume(); } catch (e) {}
+
+  onProgress(5);
+  const { images: loadedImages, audioBuffers, musicBuffer } = await preloadAssets(scenes, musicUrl, audioCtx);
+  onProgress(15);
+
+  // Background Music
+  let musicSource: AudioBufferSourceNode | null = null;
+  if (musicBuffer) {
+      musicSource = audioCtx.createBufferSource();
+      musicSource.buffer = musicBuffer;
+      musicSource.loop = true;
+      const musicGain = audioCtx.createGain();
+      musicGain.gain.value = 0.15; 
+      musicSource.connect(musicGain);
+      musicGain.connect(dest);
+      musicSource.start(0);
+  }
+
+  // Recorder
+  const canvasStream = canvas.captureStream(30);
+  const mixedTracks = [...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()];
+  const mixedStream = new MediaStream(mixedTracks);
+  const mimeType = getSupportedMimeType();
+  const recorder = new MediaRecorder(mixedStream, { mimeType, videoBitsPerSecond: 5000000 });
+  const chunks: Blob[] = [];
+
+  recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+
+  return new Promise(async (resolve, reject) => {
+    recorder.onstop = () => {
+       try { 
+         if (musicSource) musicSource.stop();
+         mixedStream.getTracks().forEach(track => track.stop()); 
+         audioCtx.close();
+       } catch {}
+       resolve(new Blob(chunks, { type: mimeType }));
+    };
+
+    recorder.start();
+
+    for (let i = 0; i < scenes.length; i++) {
+      const scene = scenes[i];
+      const imgElement = loadedImages[i];
+      const nextImgElement = (i < scenes.length - 1) ? loadedImages[i+1] : null;
+      const audioBuffer = audioBuffers[i];
+      
+      onProgress(15 + ((i) / scenes.length) * 85);
+
+      // Duration Logic
+      let duration = 3;
+      if (audioBuffer) {
+        duration = audioBuffer.duration;
+        const source = audioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(dest);
+        source.start();
+      } else {
+        duration = Math.max(3, scene.narration.length * 0.1);
+      }
+
+      const fps = 30;
+      const totalFrames = Math.ceil(duration * fps);
+      const transitionFrames = 30; // 1 second overlap
+      
+      for (let frame = 0; frame < totalFrames; frame++) {
+          const progress = frame / totalFrames;
+
+          // Base Layer
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          // Draw Current Clip
+          drawSceneFrame(ctx, imgElement, scene.movement, scene.narration, progress, 1.0);
+
+          // Crossfade to Next Clip
+          if (nextImgElement && frame > totalFrames - transitionFrames) {
+               const transProgress = (frame - (totalFrames - transitionFrames)) / transitionFrames;
+               drawSceneFrame(ctx, nextImgElement, scenes[i+1].movement, scenes[i+1].narration, 0, transProgress);
+          }
+
+          // Grain/Noise overlay for "Real" feel
+          const noise = Math.floor(Math.random() * 15);
+          ctx.fillStyle = `rgba(${noise}, ${noise}, ${noise}, 0.02)`;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          await new Promise(r => setTimeout(r, 1000 / fps));
+      }
+    }
+
+    onProgress(100);
+    recorder.stop();
+  });
 };
 
 // --- GEMINI INTEGRATION ---
 
+// We will instantiate this dynamically to ensure latest key is used
+let ai: GoogleGenAI;
+
+const initAI = () => {
+  ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+}
+// Init immediately for first load
+initAI();
+
 const generateScript = async (topic: string, duration: string): Promise<any> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
+  initAI(); // Ensure fresh instance
   const systemPrompt = `
-  Você é um produtor de vídeos especialista em YouTube. Crie um roteiro de vídeo estruturado sobre "${topic}".
-  Duração alvo: ${duration}.
-  Idioma: Português (Brasil).
-  
-  A saída deve ser um objeto JSON com:
-  1. title (título chamativo para YouTube em PT-BR)
-  2. description (otimizada para SEO em PT-BR)
-  3. tags (array de 10 strings em PT-BR)
-  4. scenes (array de objetos), onde cada cena possui:
-     - visual_prompt (Descrição visual em INGLÊS para Stable Diffusion/Flux, altamente detalhada, iluminação cinematográfica, 8k)
-     - narration (O texto em Português para o motor TTS ler)
-     - duration_est (duração estimada em segundos para esta cena, manter entre 4-8 segundos)
+  You are a professional film director.
+  Topic: "${topic}"
+  Language: Portuguese (Brazil)
+  Goal: Generate a script for a video composed of 5 clips.
+
+  INSTRUCTIONS:
+  1. Divide story into 5 Scenes.
+  2. "visual_prompt": Describe a high-quality photorealistic image. 
+     IMPORTANT: Describe the scene in a way that allows for motion (e.g. wide shots, clear focal points).
+     Avoid complex interactions that look bad when frozen. Focus on atmosphere, landscapes, and portraits.
+  3. "narration": Voiceover text in Portuguese.
+
+  REQUIRED JSON FORMAT:
+  {
+    "title": "Video Title",
+    "description": "Short description",
+    "tags": ["tag1", "tag2"],
+    "scenes": [
+      {
+        "visual_prompt": "Photorealistic prompt (max 60 words)",
+        "narration": "Voiceover text",
+        "duration_est": 5
+      }
+    ]
+  }
+
+  IMPORTANT: Return ONLY the JSON object.
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: systemPrompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            title: { type: Type.STRING },
-            description: { type: Type.STRING },
-            tags: { type: Type.ARRAY, items: { type: Type.STRING } },
-            scenes: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  visual_prompt: { type: Type.STRING },
-                  narration: { type: Type.STRING },
-                  duration_est: { type: Type.NUMBER },
-                }
-              }
-            }
-          }
-        }
+  let attempts = 0;
+  while (attempts < 3) {
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: systemPrompt,
+        config: { responseMimeType: "application/json" }
+      });
+      let cleanJson = response.text.trim().replace(/```json/g, '').replace(/```/g, '');
+      const firstOpen = cleanJson.indexOf('{');
+      const lastClose = cleanJson.lastIndexOf('}');
+      if (firstOpen !== -1 && lastClose !== -1) cleanJson = cleanJson.substring(firstOpen, lastClose + 1);
+      
+      const parsed = JSON.parse(cleanJson);
+      // Assign random movements
+      if (parsed.scenes) {
+          const moves: CameraMovement[] = ['zoom_in', 'pan_right', 'pan_left', 'zoom_out', 'tilt_up'];
+          parsed.scenes = parsed.scenes.slice(0, 5).map((s: any, i: number) => ({
+              ...s,
+              movement: moves[i % moves.length] 
+          }));
       }
-    });
-    
-    // Safety check for empty response
-    if (!response.text) {
-      throw new Error("Resposta da IA vazia");
-    }
-    
-    return JSON.parse(response.text);
-  } catch (error) {
-    console.error("Erro ao gerar roteiro:", error);
-    throw error;
+      return parsed;
+    } catch (e) { attempts++; await new Promise(r => setTimeout(r, 2000)); }
   }
 };
 
-// --- CODE GENERATION TEMPLATES ---
-
-const getPythonCode = (project: VideoProject) => {
-  // Ensure we have arrays even if data is missing
-  const scenesSafe = project.scenes || [];
-  const tagsSafe = project.tags || [];
-
-  const scenesJson = JSON.stringify(scenesSafe, null, 2);
-  const metadataJson = JSON.stringify({
-    title: project.title,
-    description: project.description,
-    tags: tagsSafe
-  }, null, 2);
-
-  return `
-# --- SISTEMA DE VÍDEO AUTOMATIZADO ---
-# Tema: ${project.topic}
-# Gerado por AutoVideo Studio
-
-import os
-import json
-import asyncio
-import edge_tts # TTS Gratuito
-from moviepy.editor import * # Edição de Vídeo
-# Nota: Para imagens, usaremos um wrapper de API genérico hipotético ou Stable Diffusion local
-# Você pode substituir 'generate_image' por chamadas à API de Inferência do HuggingFace (Plano gratuito)
-
-# --- CONFIGURAÇÃO ---
-PROJECT_DIR = "output_${project.topic.replace(/\s+/g, '_').toLowerCase()}"
-os.makedirs(PROJECT_DIR, exist_ok=True)
-os.makedirs(f"{PROJECT_DIR}/audio", exist_ok=True)
-os.makedirs(f"{PROJECT_DIR}/images", exist_ok=True)
-
-# --- DADOS ---
-SCENES = ${scenesJson}
-
-METADATA = ${metadataJson}
-
-# --- 1. GERAÇÃO DE ÁUDIO (Edge TTS - Gratuito) ---
-async def generate_audio():
-    print("🎤 Gerando Narrações...")
-    audio_files = []
-    
-    for i, scene in enumerate(SCENES):
-        text = scene['narration']
-        output_file = f"{PROJECT_DIR}/audio/scene_{i}.mp3"
-        communicate = edge_tts.Communicate(text, "pt-BR-AntonioNeural") # Excelente voz gratuita
-        await communicate.save(output_file)
-        audio_files.append(output_file)
-        print(f"  ✓ Cena {i} áudio gerado")
-        
-    return audio_files
-
-# --- 2. GERAÇÃO DE IMAGENS (Placeholder / Hook de API) ---
-def generate_images():
-    print("🎨 Gerando Imagens...")
-    image_files = []
-    
-    # INSTRUÇÃO: Substitua este loop pela sua API de Geração de Imagem GRATUITA preferida
-    # Exemplo: API de Inferência HuggingFace com FLUX.1-dev ou Stable Diffusion
-    
-    for i, scene in enumerate(SCENES):
-        prompt = scene['visual_prompt']
-        output_file = f"{PROJECT_DIR}/images/scene_{i}.png"
-        
-        # IMPLEMENTAÇÃO MOCK (Gera uma imagem de cor sólida com texto para teste)
-        # Em produção, descomente a chamada de API abaixo
-        clip = ColorClip(size=(1920, 1080), color=(50, 50, 80), duration=5)
-        txt = TextClip(f"Cena {i}\\n{prompt[:50]}...", fontsize=50, color='white')
-        comp = CompositeVideoClip([clip, txt.set_position('center')])
-        comp.save_frame(output_file, t=1)
-        
-        image_files.append(output_file)
-        print(f"  ✓ Cena {i} imagem gerada (Placeholder)")
-        
-    return image_files
-
-# --- 3. MONTAGEM DO VÍDEO (MoviePy) ---
-def assemble_video(audio_paths, image_paths):
-    print("🎬 Montando Vídeo...")
-    clips = []
-    
-    for i, (audio_path, image_path) in enumerate(zip(audio_paths, image_paths)):
-        # Carregar Áudio
-        audio_clip = AudioFileClip(audio_path)
-        duration = audio_clip.duration + 0.5 # Adicionar pequena pausa
-        
-        # Carregar Imagem & Aplicar leve efeito de Zoom (Ken Burns)
-        img_clip = ImageClip(image_path).set_duration(duration)
-        
-        # Crossfade simples
-        video_clip = img_clip.set_audio(audio_clip).crossfadein(0.5)
-        clips.append(video_clip)
-        
-    final_video = concatenate_videoclips(clips, method="compose")
-    
-    # Adicionar Música de Fundo (Opcional - garanta que o arquivo exista)
-    # bg_music = AudioFileClip("bg_music.mp3").volumex(0.1).loop(duration=final_video.duration)
-    # final_video.audio = CompositeAudioClip([final_video.audio, bg_music])
-    
-    output_path = f"{PROJECT_DIR}/video_final.mp4"
-    final_video.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
-    print(f"✅ Vídeo pronto: {output_path}")
-    return output_path
-
-# --- 4. UPLOAD PARA YOUTUBE (Usando simple-youtube-api ou google-api-python-client oficial) ---
-def upload_video(video_path):
-    print(f"🚀 Pronto para upload no YouTube!")
-    print(f"Título: {METADATA['title']}")
-    print(f"Tags: {METADATA['tags']}")
-    # Implementação requer arquivo JSON de Segredos do Cliente OAuth2.0.
-    # Veja a documentação do 'google-api-python-client'
-
-if __name__ == "__main__":
-    loop = asyncio.get_event_loop_policy().get_event_loop()
-    try:
-        audio_files = loop.run_until_complete(generate_audio())
-        image_files = generate_images()
-        final_video = assemble_video(audio_files, image_files)
-        # upload_video(final_video)
-    finally:
-        loop.close()
-`;
+const generateSceneAssetAudio = async (text: string): Promise<string> => {
+    initAI();
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-preview-tts",
+      contents: [{ parts: [{ text: text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+      },
+    });
+    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (!base64Audio) throw new Error("No audio");
+    return pcmToWav(base64Audio, 24000); 
 };
 
-const getRequirementsTxt = () => `
-edge-tts
-moviepy==1.0.3
-requests
-google-api-python-client
-google-auth-oauthlib
-google-auth-httplib2
-imageio-ffmpeg
-`;
+// Use Gemini Flash for Image Generation (Free-tier friendly)
+const generateSceneVisualKeyframe = async (prompt: string): Promise<string> => {
+  initAI();
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image', 
+      contents: { parts: [{ text: prompt + ", cinematic lighting, 8k, photorealistic, highly detailed" }] },
+    });
+    const base64Image = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
+    if (!base64Image) throw new Error("No image");
+    return `data:image/jpeg;base64,${base64Image}`;
+  } catch (e) {
+    console.error("Image gen failed", e);
+    return `https://placehold.co/1280x720/1a1a1a/FFF?text=${encodeURIComponent(prompt.substring(0, 30))}`;
+  }
+};
 
 // --- COMPONENTS ---
 
-const StepIcon = ({ step, current, icon: Icon }: any) => {
-  const steps = ['idle', 'scripting', 'review_script', 'planning_media', 'ready_for_code'];
+const StepIcon = ({ step, current, label, subLabel }: any) => {
+  const steps = ['idle', 'scripting', 'review_script', 'producing', 'completed'];
   const currentIndex = steps.indexOf(current);
   const stepIndex = steps.indexOf(step);
-  
-  let statusColor = "text-zinc-600 bg-zinc-900 border-zinc-800";
-  if (stepIndex === currentIndex) statusColor = "text-blue-400 bg-blue-950/30 border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.2)]";
-  if (stepIndex < currentIndex) statusColor = "text-green-400 bg-green-950/30 border-green-500/50";
+  const isCompleted = stepIndex < currentIndex;
+  const isActive = stepIndex === currentIndex;
 
   return (
-    <div className={`w-10 h-10 rounded-full border flex items-center justify-center transition-all duration-300 ${statusColor}`}>
-      {stepIndex < currentIndex ? <CheckCircle2 size={20} /> : <Icon size={20} />}
+    <div className="flex items-start gap-4 group">
+      <div className={`
+        w-8 h-8 rounded-full border-2 flex items-center justify-center shrink-0 transition-all duration-300
+        ${isCompleted ? "bg-green-500 border-green-500 text-black" : 
+          isActive ? "border-blue-500 text-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.3)]" : 
+          "border-zinc-800 text-transparent"}
+      `}>
+        {isCompleted && <Check size={16} strokeWidth={3} />}
+        {isActive && <div className="w-2 h-2 rounded-full bg-blue-500"></div>}
+      </div>
+      <div>
+        <p className={`text-sm font-bold transition-colors ${isActive || isCompleted ? 'text-white' : 'text-zinc-500'}`}>
+          {label}
+        </p>
+        <p className="text-xs text-zinc-500">{subLabel}</p>
+      </div>
     </div>
   );
 };
 
-const CodeBlock = ({ title, code, lang }: { title: string, code: string, lang: string }) => {
-  const [copied, setCopied] = useState(false);
+const VideoPlayer = ({ scenes, onClose }: { scenes: Scene[], onClose: () => void }) => {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const currentScene = scenes[currentIndex];
+
+  useEffect(() => {
+    // Sync logic for player preview
+    if (isPlaying) {
+        audioRef.current?.play().catch(() => {});
+    } else {
+        audioRef.current?.pause();
+    }
+  }, [currentIndex, isPlaying, currentScene]);
+
+  const handleEnded = () => {
+    if (currentIndex < scenes.length - 1) setCurrentIndex(prev => prev + 1);
+    else { setIsPlaying(false); setCurrentIndex(0); }
+  };
   
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const togglePlay = () => setIsPlaying(!isPlaying);
+
+  // Preview transform styles
+  const getTransform = (m: CameraMovement) => {
+      if (!isPlaying) return 'scale(1)';
+      // Simulation of movement for preview
+      switch(m) {
+          case 'zoom_in': return 'scale(1.2)';
+          case 'zoom_out': return 'scale(1)';
+          case 'pan_left': return 'translate(-10%, 0) scale(1.1)';
+          case 'pan_right': return 'translate(10%, 0) scale(1.1)';
+          default: return 'scale(1.1)';
+      }
   };
 
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-950 overflow-hidden mb-4">
-      <div className="flex justify-between items-center px-4 py-2 bg-zinc-900/50 border-b border-zinc-800">
-        <span className="text-xs font-mono text-zinc-400 uppercase">{title}</span>
-        <button 
-          onClick={handleCopy}
-          className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-white transition-colors"
-        >
-          {copied ? <CheckCircle2 size={12} className="text-green-500" /> : <Copy size={12} />}
-          {copied ? "Copiado" : "Copiar"}
+    <div className="fixed inset-0 z-[9999] bg-black/95 flex flex-col items-center justify-center p-4 backdrop-blur-xl">
+      <div className="absolute top-6 right-6 z-50">
+        <button onClick={onClose} className="bg-white/10 hover:bg-white/20 text-white p-3 rounded-full backdrop-blur-md transition-all border border-white/5">
+           <X size={24} />
         </button>
       </div>
-      <div className="p-4 overflow-x-auto code-scroll">
-        <pre className="text-sm font-mono text-zinc-300 leading-relaxed">
-          <code>{code}</code>
-        </pre>
+
+      <div className="w-full max-w-6xl aspect-video bg-zinc-900 rounded-2xl border border-zinc-800 relative overflow-hidden shadow-2xl flex items-center justify-center">
+        {currentScene?.imageUrl ? (
+             <div className="relative w-full h-full overflow-hidden bg-black">
+                <img 
+                  key={currentScene.id}
+                  src={currentScene.imageUrl} 
+                  className={`w-full h-full object-cover transition-transform duration-[5000ms] ease-linear`}
+                  style={{ 
+                      transform: getTransform(currentScene.movement),
+                      transformOrigin: 'center center'
+                  }}
+                />
+            </div>
+        ) : (
+            <div className="text-zinc-500 flex flex-col items-center">
+                <Loader2 className="animate-spin mb-2" size={32} />
+                <span className="text-lg">Carregando Cena...</span>
+            </div>
+        )}
+        
+        <div className="absolute bottom-16 left-0 right-0 text-center px-8 z-20">
+            <span className="inline-block bg-black/50 text-white px-6 py-3 rounded-2xl text-xl font-medium backdrop-blur-md border border-white/10 shadow-lg max-w-4xl">
+                {currentScene?.narration}
+            </span>
+        </div>
+
+        <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-zinc-800 z-30">
+            <div className="h-full bg-blue-500 transition-all duration-300 shadow-[0_0_15px_rgba(59,130,246,0.6)]" style={{ width: `${((currentIndex + 1) / scenes.length) * 100}%` }}></div>
+        </div>
+      </div>
+
+      {/* Audio controls playback state */}
+      <audio ref={audioRef} src={currentScene?.audioUrl} onEnded={handleEnded} />
+
+      <div className="mt-8 flex items-center gap-8">
+        <button onClick={togglePlay} className="text-white hover:text-blue-400 transition-all hover:scale-110">
+            {isPlaying ? <PauseCircle size={64} fill="white" className="text-black/50" /> : <PlayCircle size={64} fill="white" className="text-black/50" />}
+        </button>
+        <div className="text-zinc-400 font-mono text-base bg-zinc-900 px-4 py-2 rounded-full border border-zinc-800">
+            Cena <span className="text-white">{currentIndex + 1}</span> <span className="text-zinc-600">/</span> {scenes.length}
+        </div>
       </div>
     </div>
   );
 };
 
 const App = () => {
-  const [topic, setTopic] = useState("A história do café em 3 minutos");
+  const [topic, setTopic] = useState("");
   const [duration, setDuration] = useState("3 a 5 minutos");
+  const [selectedMusic, setSelectedMusic] = useState<string>("ambient");
+
   const [loading, setLoading] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0); 
   const [project, setProject] = useState<VideoProject | null>(null);
-  const [activeTab, setActiveTab] = useState<'workflow' | 'code'>('workflow');
+  const [activeTab, setActiveTab] = useState<'workflow' | 'production'>('workflow');
+  const [showPlayer, setShowPlayer] = useState(false);
+  const [rendering, setRendering] = useState(false);
+  const [renderProgress, setRenderProgress] = useState(0);
+
+  const processIdRef = useRef(0);
 
   const startProcess = async () => {
+    if (!topic.trim()) { alert("Por favor, digite um tema para o vídeo."); return; }
+    
+    const currentProcessId = processIdRef.current + 1;
+    processIdRef.current = currentProcessId;
+
     setLoading(true);
-    // Initialize with safe empty arrays
+    setLoadingProgress(0);
+
+    const interval = setInterval(() => {
+        if (processIdRef.current === currentProcessId) {
+            setLoadingProgress(prev => prev >= 95 ? prev : prev + Math.floor(Math.random() * 5) + 1);
+        }
+    }, 400);
+
+    const musicUrl = MUSIC_LIBRARY.find(m => m.id === selectedMusic)?.url || '';
+
     setProject({ 
-      title: "Gerando...", 
-      description: "", 
-      tags: [], 
-      scenes: [], 
-      topic, 
-      status: 'scripting' 
+      title: "Gerando...", description: "", tags: [], scenes: [], topic, 
+      status: 'scripting', backgroundMusicUrl: musicUrl
     });
 
     try {
       const scriptData = await generateScript(topic, duration);
-      // Validate structure before setting state
+      
+      clearInterval(interval);
+      if (processIdRef.current !== currentProcessId) return;
+
+      setLoadingProgress(100);
+      await new Promise(r => setTimeout(r, 400));
+      if (processIdRef.current !== currentProcessId) return;
+
+      const scenesWithStatus = (scriptData.scenes || []).map((s: any, i: number) => ({
+        ...s, id: i, status: 'pending'
+      }));
+
       setProject({
         title: scriptData.title || "Sem Título",
         description: scriptData.description || "",
         tags: Array.isArray(scriptData.tags) ? scriptData.tags : [],
-        scenes: Array.isArray(scriptData.scenes) ? scriptData.scenes : [],
+        scenes: scenesWithStatus,
         topic,
-        status: 'review_script'
+        status: 'review_script',
+        backgroundMusicUrl: musicUrl
       });
     } catch (e) {
-      alert("Erro ao gerar roteiro. Tente novamente.");
-      // Reset project on error so we don't show broken state
-      setProject(null); 
-    } finally {
-      setLoading(false);
+      clearInterval(interval);
+      if (processIdRef.current === currentProcessId) {
+          alert("Erro ao gerar roteiro. Tente novamente.");
+          setProject(null); 
+      }
+    } finally { 
+       if (processIdRef.current === currentProcessId) setLoading(false); 
     }
   };
 
-  const proceedToCode = () => {
-    if (project) {
-      setProject({ ...project, status: 'ready_for_code' });
-      setActiveTab('code');
+  const startProduction = async () => {
+    if (!project) return;
+    
+    setProject(prev => prev ? { ...prev, status: 'producing' } : null);
+    setActiveTab('production');
+
+    const newScenes = [...project.scenes];
+    
+    for (let i = 0; i < newScenes.length; i++) {
+        if (processIdRef.current !== processIdRef.current) break;
+        if (newScenes[i].status === 'completed') continue;
+
+        if (!newScenes[i].audioUrl) {
+            newScenes[i].status = 'generating_audio';
+            setProject(prev => prev ? { ...prev, scenes: [...newScenes] } : null);
+            try {
+                const audioUrl = await generateSceneAssetAudio(newScenes[i].narration);
+                newScenes[i].audioUrl = audioUrl;
+            } catch (e) { console.error(`Failed audio for scene ${i}`, e); }
+        }
+
+        if (!newScenes[i].imageUrl) {
+            newScenes[i].status = 'generating_visual';
+            setProject(prev => prev ? { ...prev, scenes: [...newScenes] } : null);
+            try {
+                // Using Flash Image for fast/free generation
+                const imageUrl = await generateSceneVisualKeyframe(newScenes[i].visual_prompt);
+                newScenes[i].imageUrl = imageUrl;
+            } catch (e: any) {
+                console.error(`Failed video for scene ${i}`, e);
+                newScenes[i].status = 'error';
+            }
+        }
+
+        newScenes[i].status = 'completed';
+        setProject(prev => prev ? { ...prev, scenes: [...newScenes] } : null);
     }
+
+    setProject(prev => prev ? { ...prev, status: 'completed' } : null);
+  };
+
+  const handleRenderVideo = async () => {
+      if (!project) return;
+      setRendering(true);
+      setRenderProgress(0);
+      try {
+          await new Promise(r => setTimeout(r, 100));
+          const blob = await renderVideoInBrowser(project.scenes, project.backgroundMusicUrl, (p) => setRenderProgress(p));
+          setProject(prev => prev ? { ...prev, videoBlob: blob } : null);
+      } catch (e) {
+          alert("Erro na montagem do vídeo.");
+      } finally { setRendering(false); }
+  };
+
+  const handleDownloadVideo = () => {
+      if (!project?.videoBlob) return;
+      const url = URL.createObjectURL(project.videoBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${project.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.mp4`; 
+      a.click();
+      URL.revokeObjectURL(url);
+  };
+
+  const handleNewProject = () => {
+    processIdRef.current += 1;
+    setProject(null);
+    setTopic("");
+    setLoading(false);
+    setDuration("3 a 5 minutos");
+    setSelectedMusic("ambient");
+    setActiveTab('workflow');
+    setShowPlayer(false);
+    setRendering(false);
+    setRenderProgress(0);
   };
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-zinc-200 flex flex-col font-sans selection:bg-blue-500/30">
+    <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col font-sans selection:bg-blue-500/30">
       
-      {/* HEADER */}
-      <header className="h-16 border-b border-zinc-800 flex items-center justify-between px-8 bg-zinc-950/50 backdrop-blur-md sticky top-0 z-50">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-indigo-600 rounded flex items-center justify-center shadow-lg shadow-blue-900/20">
-            <Film size={18} className="text-white" />
+      {showPlayer && project && (
+        <VideoPlayer scenes={project.scenes} onClose={() => setShowPlayer(false)} />
+      )}
+
+      {/* NAV HEADER */}
+      <header className="h-20 flex items-center justify-between px-8 bg-transparent absolute top-0 left-0 right-0 z-50 pointer-events-none">
+        <div className="flex items-center gap-4 pointer-events-auto">
+          <div className="w-10 h-10 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+            <Film size={20} className="text-white fill-white/20" />
           </div>
-          <h1 className="font-bold text-lg tracking-tight text-white">AutoVideo <span className="text-blue-500">Studio</span></h1>
+          <span className="font-bold text-xl tracking-tight text-white">AutoVideo<span className="text-blue-500">.ai</span></span>
         </div>
-        <div className="flex gap-4 text-sm">
-          <div className="flex items-center gap-2 text-zinc-500">
-            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-            Gemini 2.5 Flash Ativo
-          </div>
+        
+        <div className="flex items-center gap-4 pointer-events-auto">
+             {(project || loading) && (
+                <button 
+                  onClick={handleNewProject}
+                  className="bg-zinc-800/80 hover:bg-zinc-700/80 backdrop-blur-md text-white px-5 py-2.5 rounded-full text-sm font-semibold transition-all border border-zinc-700/50 hover:border-zinc-600 shadow-sm"
+                >
+                  Novo Projeto
+                </button>
+             )}
         </div>
       </header>
 
-      <main className="flex-1 max-w-7xl mx-auto w-full p-8 grid grid-cols-12 gap-8">
+      <main className="flex-1 w-full flex flex-col relative">
         
-        {/* SIDEBAR NAVIGATION */}
-        <div className="col-span-12 lg:col-span-3 space-y-8">
-          
-          <div className="bg-zinc-900/50 rounded-xl border border-zinc-800 p-6 space-y-6">
-            <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Progresso do Workflow</h2>
-            <div className="space-y-6 relative">
-              {/* Vertical Line */}
-              <div className="absolute left-5 top-4 bottom-4 w-px bg-zinc-800 -z-10"></div>
-              
-              <div className="flex items-center gap-4">
-                <StepIcon step="idle" current={project?.status || 'idle'} icon={Clapperboard} />
-                <div>
-                  <p className="text-sm font-medium text-white">Tema & Setup</p>
-                  <p className="text-xs text-zinc-500">Defina sua ideia</p>
-                </div>
-              </div>
-              
-              <div className="flex items-center gap-4">
-                <StepIcon step="scripting" current={project?.status || 'idle'} icon={FileText} />
-                <div>
-                  <p className="text-sm font-medium text-white">Roteirização IA</p>
-                  <p className="text-xs text-zinc-500">Storyboard</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-4">
-                <StepIcon step="review_script" current={project?.status || 'idle'} icon={Settings} />
-                <div>
-                  <p className="text-sm font-medium text-white">Revisão</p>
-                  <p className="text-xs text-zinc-500">Editar narração</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-4">
-                <StepIcon step="ready_for_code" current={project?.status || 'idle'} icon={Code} />
-                <div>
-                  <p className="text-sm font-medium text-white">Geração do Sistema</p>
-                  <p className="text-xs text-zinc-500">Python & Deploy</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-gradient-to-br from-blue-900/20 to-indigo-900/20 rounded-xl border border-blue-500/10 p-6">
-            <h3 className="text-blue-400 font-medium mb-2 flex items-center gap-2">
-              <Cpu size={16} /> Especificações
-            </h3>
-            <ul className="text-xs text-zinc-400 space-y-2">
-              <li className="flex justify-between"><span>IA de Roteiro:</span> <span className="text-white">Gemini 2.5 Flash</span></li>
-              <li className="flex justify-between"><span>Motor TTS:</span> <span className="text-white">Edge-TTS (Grátis)</span></li>
-              <li className="flex justify-between"><span>Motor de Vídeo:</span> <span className="text-white">MoviePy + FFmpeg</span></li>
-              <li className="flex justify-between"><span>Plataforma:</span> <span className="text-white">Python 3.10+</span></li>
-            </ul>
-          </div>
-        </div>
-
-        {/* MAIN CONTENT AREA */}
-        <div className="col-span-12 lg:col-span-9 bg-zinc-900/30 rounded-2xl border border-zinc-800 overflow-hidden flex flex-col min-h-[600px]">
-          
-          {/* TABS */}
-          {project?.status !== 'idle' && project?.status !== 'scripting' && (
-            <div className="flex border-b border-zinc-800">
-              <button 
-                onClick={() => setActiveTab('workflow')}
-                className={`flex-1 py-4 text-sm font-medium transition-colors ${activeTab === 'workflow' ? 'text-white border-b-2 border-blue-500 bg-zinc-900/50' : 'text-zinc-500 hover:text-zinc-300'}`}
-              >
-                Espaço do Projeto
-              </button>
-              <button 
-                onClick={() => setActiveTab('code')}
-                className={`flex-1 py-4 text-sm font-medium transition-colors ${activeTab === 'code' ? 'text-white border-b-2 border-blue-500 bg-zinc-900/50' : 'text-zinc-500 hover:text-zinc-300'}`}
-              >
-                Código do Sistema
-              </button>
-            </div>
-          )}
-
-          {/* VIEW: INITIAL INPUT */}
-          {!project && (
-            <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
-              <div className="w-20 h-20 bg-blue-600/10 rounded-full flex items-center justify-center mb-6">
-                 <Youtube size={40} className="text-blue-500" />
-              </div>
-              <h2 className="text-3xl font-bold text-white mb-4">Qual vídeo você quer criar?</h2>
-              <p className="text-zinc-400 max-w-md mb-8">
-                Descreva seu tema. O sistema irá gerar um roteiro completo, plano de narração, prompts visuais e o código Python para construí-lo.
-              </p>
-              
-              <div className="w-full max-w-lg space-y-4">
-                <input 
-                  type="text" 
-                  value={topic}
-                  onChange={(e) => setTopic(e.target.value)}
-                  placeholder="ex: O Futuro da IA em 2025"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-4 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                />
+        {/* === LANDING PAGE === */}
+        {!project && !loading && (
+            <div className="flex-1 flex flex-col items-center pt-32 pb-12 px-6 max-w-7xl mx-auto w-full">
                 
-                <div className="flex gap-4">
-                  <select 
-                     value={duration}
-                     onChange={(e) => setDuration(e.target.value)}
-                     className="bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 text-zinc-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 flex-1"
-                  >
-                    <option value="3 a 5 minutos">3 a 5 Minutos</option>
-                    <option value="1 minuto (Shorts)">1 Minuto (Shorts)</option>
-                    <option value="10 minutos">10 Minutos (Aprofundado)</option>
-                  </select>
-
-                  <button 
-                    onClick={startProcess}
-                    disabled={loading}
-                    className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg px-6 py-3 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {loading ? <Loader2 className="animate-spin" /> : <Play size={18} fill="currentColor" />}
-                    Gerar Sistema
-                  </button>
+                <div className="text-center mb-12 space-y-4">
+                  <h1 className="text-5xl md:text-7xl font-bold text-white tracking-tight">
+                    Imagine, <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-500">Gere</span>, Assista.
+                  </h1>
+                  <p className="text-zinc-400 text-lg md:text-xl max-w-2xl mx-auto font-light">
+                    Agora com <span className="text-blue-400 font-semibold">Gemini Flash</span> para geração ultra-rápida e gratuita.
+                  </p>
                 </div>
+
+                {/* MAGIC INPUT BAR */}
+                <div className="w-full max-w-4xl relative group z-30">
+                    <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-3xl opacity-30 group-hover:opacity-50 blur transition duration-500"></div>
+                    <div className="relative bg-[#0F0F12] border border-zinc-800 rounded-3xl p-2 shadow-2xl flex items-start md:items-center gap-2 flex-col md:flex-row transition-all group-focus-within:border-blue-500/50">
+                        
+                        <div className="flex-1 flex flex-col w-full">
+                          <input
+                              type="text"
+                              value={topic}
+                              onChange={(e) => setTopic(e.target.value)}
+                              placeholder="Sobre o que é o seu vídeo hoje?"
+                              className="w-full bg-transparent text-white text-lg p-4 outline-none placeholder-zinc-600 font-medium"
+                              onKeyDown={(e) => e.key === 'Enter' && startProcess()}
+                          />
+                        </div>
+
+                        {/* Config Pills */}
+                        <div className="flex items-center gap-2 px-2 pb-2 md:pb-0 w-full md:w-auto overflow-x-auto scrollbar-hide">
+                            <div className="relative flex-shrink-0">
+                                <div className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-4 py-2.5 rounded-xl text-sm font-medium cursor-pointer border border-zinc-800 transition-colors">
+                                    <Clock size={16} className="text-blue-500" />
+                                    <span>{duration}</span>
+                                    <ChevronDown size={14} className="opacity-50" />
+                                </div>
+                                <select 
+                                    value={duration}
+                                    onChange={(e) => setDuration(e.target.value)}
+                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                >
+                                    <option value="3 a 5 minutos">3 a 5 Minutos</option>
+                                    <option value="1 minuto (Shorts)">1 Minuto (Shorts)</option>
+                                </select>
+                            </div>
+
+                            <div className="relative flex-shrink-0">
+                                <div className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-4 py-2.5 rounded-xl text-sm font-medium cursor-pointer border border-zinc-800 transition-colors">
+                                    <Music size={16} className="text-purple-500" />
+                                    <span className="truncate max-w-[100px]">{MUSIC_LIBRARY.find(m => m.id === selectedMusic)?.name || 'Música'}</span>
+                                    <ChevronDown size={14} className="opacity-50" />
+                                </div>
+                                <select 
+                                    value={selectedMusic}
+                                    onChange={(e) => setSelectedMusic(e.target.value)}
+                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                >
+                                    {MUSIC_LIBRARY.map(m => (
+                                        <option key={m.id} value={m.id}>{m.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+
+                        <button 
+                            onClick={startProcess}
+                            disabled={!topic.trim()}
+                            className="bg-white hover:bg-blue-50 text-black p-4 rounded-2xl transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:scale-105 shadow-lg flex-shrink-0"
+                        >
+                            <ArrowRight size={24} />
+                        </button>
+                    </div>
+                </div>
+
+                {/* STYLE CARDS */}
+                <div className="w-full mt-20">
+                    <div className="flex items-center justify-between mb-6">
+                        <h2 className="text-2xl font-bold text-white">Estilos & Inspirações</h2>
+                        <button className="text-zinc-500 hover:text-white transition-colors text-sm flex items-center gap-1">Ver todos <ArrowRight size={14} /></button>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div 
+                           onClick={() => setTopic("")}
+                           className="group relative aspect-[4/5] rounded-3xl border-2 border-dashed border-zinc-800 hover:border-zinc-600 bg-transparent flex flex-col items-center justify-center cursor-pointer transition-all hover:bg-zinc-900/50"
+                        >
+                             <div className="w-12 h-12 rounded-full bg-zinc-900 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                                <Plus size={24} className="text-zinc-400" />
+                             </div>
+                             <span className="text-zinc-400 font-medium">Novo Estilo</span>
+                        </div>
+
+                        {INSPIRATION_EXAMPLES.map((ex, idx) => (
+                             <div 
+                                key={idx} 
+                                onClick={() => setTopic(`Crie um vídeo cinematográfico sobre: ${ex.title}`)}
+                                className="group relative aspect-[4/5] rounded-3xl overflow-hidden cursor-pointer bg-zinc-900 border border-zinc-800 hover:border-zinc-500 transition-all"
+                             >
+                                 <img src={ex.img} alt={ex.title} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110 opacity-60 group-hover:opacity-100" />
+                                 <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent"></div>
+                                 <div className="absolute bottom-5 left-5 right-5">
+                                     <span className="inline-block px-2 py-1 bg-white/10 backdrop-blur-md rounded-md text-[10px] font-bold uppercase tracking-wider text-blue-300 mb-2 border border-white/10">{ex.style}</span>
+                                     <p className="text-white font-bold text-xl leading-tight group-hover:text-blue-400 transition-colors">{ex.title}</p>
+                                 </div>
+                             </div>
+                         ))}
+                    </div>
+                </div>
+
+                {/* CATEGORY PILLS */}
+                <div className="w-full mt-12">
+                   <h3 className="text-zinc-500 font-medium mb-4 text-sm uppercase tracking-wider ml-1">Ideias Rápidas</h3>
+                   <div className="flex flex-wrap gap-3">
+                        {POPULAR_IDEAS.map((idea, idx) => (
+                            <button 
+                                key={idx}
+                                onClick={() => setTopic(idea.label)}
+                                className="flex items-center gap-3 bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 pl-2 pr-5 py-2 rounded-full text-sm transition-all hover:border-zinc-600 group"
+                            >
+                                <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-lg group-hover:scale-110 transition-transform">
+                                  {idea.icon}
+                                </div>
+                                <span className="font-medium">{idea.label}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* === LOADING STATE === */}
+        {loading && (
+            <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
+              <div className="relative">
+                <div className="absolute inset-0 bg-blue-500 blur-3xl opacity-20 rounded-full"></div>
+                <Loader2 size={64} className="text-blue-500 animate-spin relative z-10" />
+              </div>
+              <h3 className="text-2xl font-bold text-white mt-8 mb-2">Criando Roteiro...</h3>
+              <p className="text-zinc-500 max-w-md">A IA está dividindo sua ideia em cenas visuais e escrevendo a narração perfeita.</p>
+              
+              <div className="w-64 h-1.5 bg-zinc-900 rounded-full mt-8 overflow-hidden">
+                 <div className="h-full bg-blue-600 rounded-full transition-all duration-300" style={{ width: `${loadingProgress}%` }}></div>
               </div>
             </div>
-          )}
+        )}
 
-          {/* VIEW: LOADING */}
-          {loading && (
-            <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
-              <Loader2 size={48} className="text-blue-500 animate-spin mb-6" />
-              <h3 className="text-xl font-medium text-white">Projetando seu sistema de vídeo...</h3>
-              <p className="text-zinc-500 mt-2">Escrevendo roteiro, criando prompts visuais e estruturando código.</p>
-            </div>
-          )}
-
-          {/* VIEW: WORKSPACE */}
-          {project && !loading && activeTab === 'workflow' && (
-            <div className="flex-1 overflow-auto p-8 custom-scrollbar">
-              <div className="max-w-4xl mx-auto space-y-8">
+        {/* === PROJECT WORKSPACE === */}
+        {project && !loading && (
+             <div className="flex-1 max-w-[1600px] mx-auto w-full p-6 pt-24 flex flex-col lg:flex-row gap-8">
                 
-                {/* Project Meta */}
-                <div className="grid grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <label className="text-xs uppercase font-bold text-zinc-500">Título do Vídeo</label>
-                    <div className="p-3 bg-zinc-950 border border-zinc-800 rounded text-zinc-200 font-medium">
-                      {project.title}
+                {/* SIDEBAR NAVIGATION */}
+                <div className="lg:w-80 flex-shrink-0 flex flex-col gap-6">
+                  <div className="bg-[#0F0F12] rounded-3xl border border-zinc-800/50 p-6 shadow-xl">
+                    <div className="flex items-center justify-between mb-6">
+                        <h2 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Etapas</h2>
+                        <span className="text-xs bg-zinc-800 text-zinc-400 px-2 py-1 rounded">{project.status === 'completed' ? '100%' : '50%'}</span>
+                    </div>
+                    
+                    <div className="space-y-6 relative ml-2">
+                      <div className="absolute left-[15px] top-3 bottom-3 w-0.5 bg-zinc-800/50 -z-10"></div>
+                      <StepIcon step="idle" current={project.status} label="Roteiro & Ideia" subLabel="Planejamento" />
+                      <StepIcon step="scripting" current={project.status} label="Geração de Clipes" subLabel="Gemini Flash 2.5" />
+                      <StepIcon step="review_script" current={project.status} label="Narração Neural" subLabel="Áudio TTS" />
+                      <StepIcon step="producing" current={project.status} label="Montagem" subLabel="Renderização" />
+                      <StepIcon step="completed" current={project.status} label="Finalizado" subLabel="Pronto para uso" />
                     </div>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-xs uppercase font-bold text-zinc-500">Tags Alvo</label>
-                    <div className="flex flex-wrap gap-2">
-                      {/* Safety check: ensure tags is array before slice */}
-                      {(project.tags || []).slice(0, 5).map(tag => (
-                        <span key={tag} className="text-xs bg-blue-900/30 text-blue-300 px-2 py-1 rounded border border-blue-500/20">#{tag}</span>
-                      ))}
-                    </div>
+
+                  <div className="bg-[#0F0F12] rounded-3xl border border-zinc-800/50 p-6 shadow-xl flex-1">
+                     <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4">Detalhes</h3>
+                     <h2 className="text-white font-bold text-lg leading-tight mb-2">{project.title}</h2>
+                     <div className="flex flex-wrap gap-2 mb-4">
+                         {project.tags.slice(0,3).map(tag => (
+                             <span key={tag} className="text-[10px] bg-blue-500/10 text-blue-400 px-2 py-1 rounded border border-blue-500/20">#{tag}</span>
+                         ))}
+                     </div>
+                     <p className="text-zinc-500 text-sm line-clamp-4">{project.description}</p>
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                   <label className="text-xs uppercase font-bold text-zinc-500">Descrição</label>
-                   <div className="p-3 bg-zinc-950 border border-zinc-800 rounded text-zinc-400 text-sm whitespace-pre-wrap">
-                      {project.description}
-                   </div>
-                </div>
+                {/* MAIN GALLERY */}
+                <div className="flex-1 flex flex-col">
+                  
+                  {/* WORKSPACE HEADER */}
+                  <div className="flex items-center justify-between mb-8">
+                      <div>
+                          <h1 className="text-3xl font-bold text-white mb-1">
+                              {activeTab === 'workflow' ? 'Planejamento de Cenas' : 'Estúdio de Produção'}
+                          </h1>
+                          <p className="text-zinc-500">
+                              {activeTab === 'workflow' ? 'Revise os prompts antes de gerar.' : 'Acompanhe a geração dos assets.'}
+                          </p>
+                      </div>
 
-                {/* Scenes */}
-                <div>
-                   <div className="flex justify-between items-end mb-4">
-                     {/* Safety check: ensure scenes is array for length */}
-                     <label className="text-xs uppercase font-bold text-zinc-500">Storyboard ({(project.scenes || []).length} Cenas)</label>
-                   </div>
-                   
-                   <div className="space-y-4">
-                     {/* Safety check: ensure scenes is array before map */}
-                     {(project.scenes || []).map((scene, idx) => (
-                       <div key={idx} className="bg-zinc-950/50 border border-zinc-800 rounded-lg p-4 hover:border-zinc-700 transition-colors group">
-                         <div className="flex gap-4 items-start">
-                           <div className="w-8 h-8 rounded bg-zinc-900 flex items-center justify-center text-zinc-500 font-mono text-xs border border-zinc-800">
-                             {idx + 1}
-                           </div>
-                           <div className="flex-1 grid grid-cols-2 gap-6">
-                             <div>
-                               <div className="flex items-center gap-2 mb-2">
-                                 <Mic size={14} className="text-blue-400" />
-                                 <span className="text-xs font-semibold text-zinc-300">Narração (PT-BR)</span>
-                               </div>
-                               <p className="text-sm text-zinc-400 italic">"{scene.narration}"</p>
+                      <div className="flex gap-2 bg-zinc-900 p-1 rounded-full border border-zinc-800">
+                          <button 
+                              onClick={() => setActiveTab('workflow')}
+                              className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${activeTab === 'workflow' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+                          >
+                              Roteiro
+                          </button>
+                          <button 
+                              onClick={() => setActiveTab('production')}
+                              className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${activeTab === 'production' ? 'bg-zinc-800 text-white shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+                          >
+                              Produção
+                          </button>
+                      </div>
+                  </div>
+
+                  {/* WORKFLOW TAB */}
+                  {activeTab === 'workflow' && (
+                      <div className="flex-1 bg-[#0F0F12] border border-zinc-800 rounded-3xl p-8 shadow-2xl">
+                          <div className="space-y-6">
+                              {project.scenes.map((scene, idx) => (
+                                  <div key={idx} className="group bg-zinc-900/30 border border-zinc-800/50 hover:border-zinc-700/80 rounded-2xl p-6 transition-all">
+                                      <div className="flex items-start gap-6">
+                                          <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-zinc-400 font-mono text-sm shrink-0 border border-zinc-700">
+                                              {idx + 1}
+                                          </div>
+                                          <div className="flex-1 space-y-3">
+                                              <div className="flex items-center gap-3">
+                                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/20 text-blue-400 border border-blue-500/20 uppercase">
+                                                      {scene.movement}
+                                                  </span>
+                                                  <span className="text-zinc-600 text-xs flex items-center gap-1"><Clock size={10} /> ~{scene.duration_est}s</span>
+                                              </div>
+                                              <p className="text-zinc-300 font-medium">"{scene.narration}"</p>
+                                              <div className="bg-black/20 p-3 rounded-xl border border-white/5">
+                                                  <p className="text-zinc-500 text-sm italic">Prompt: {scene.visual_prompt}</p>
+                                              </div>
+                                          </div>
+                                      </div>
+                                  </div>
+                              ))}
+                          </div>
+                          
+                          <div className="mt-8 flex justify-end">
+                              <button 
+                                  onClick={startProduction}
+                                  className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-2xl font-bold text-lg flex items-center gap-3 transition-all hover:scale-105 shadow-xl shadow-blue-900/20"
+                              >
+                                  <Wand2 size={24} /> Iniciar Geração Flash (Grátis)
+                              </button>
+                          </div>
+                      </div>
+                  )}
+
+                  {/* PRODUCTION TAB */}
+                  {activeTab === 'production' && (
+                      <div className="flex-1">
+                         {/* Status Banner */}
+                         <div className="bg-gradient-to-r from-zinc-900 to-black border border-zinc-800 rounded-3xl p-6 mb-8 flex items-center justify-between shadow-lg">
+                             <div className="flex items-center gap-4">
+                                 <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${project.status === 'completed' ? 'bg-green-500/20 text-green-400' : 'bg-blue-500/20 text-blue-400'}`}>
+                                     {project.status === 'completed' ? <Check size={24} /> : <Loader2 size={24} className="animate-spin" />}
+                                 </div>
+                                 <div>
+                                     <h3 className="text-white font-bold text-lg">
+                                        {project.status === 'completed' ? 'Renderização Concluída' : 'Gerando Assets (Modo Gratuito)...'}
+                                     </h3>
+                                     <p className="text-zinc-400 text-sm">
+                                        {project.status === 'completed' ? 'Seu vídeo final está pronto.' : 'Aguarde enquanto criamos as cenas em alta definição.'}
+                                     </p>
+                                 </div>
                              </div>
-                             <div>
-                               <div className="flex items-center gap-2 mb-2">
-                                 <ImageIcon size={14} className="text-purple-400" />
-                                 <span className="text-xs font-semibold text-zinc-300">Prompt Visual</span>
-                               </div>
-                               <p className="text-xs text-zinc-500 font-mono bg-black/20 p-2 rounded border border-white/5">
-                                 {scene.visual_prompt}
-                               </p>
+                             
+                             <div className="flex gap-3">
+                                 {project.status === 'completed' && !project.videoBlob && (
+                                     <button 
+                                        onClick={handleRenderVideo}
+                                        disabled={rendering}
+                                        className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-medium transition-all flex items-center gap-2 shadow-lg shadow-blue-900/20"
+                                     >
+                                         {rendering ? <Loader2 className="animate-spin" size={18} /> : <Settings size={18} />}
+                                         {rendering ? `Compilando ${Math.round(renderProgress)}%` : "Montar Final"}
+                                     </button>
+                                 )}
+                                 {project.videoBlob && (
+                                     <>
+                                        <button onClick={() => setShowPlayer(true)} className="bg-zinc-800 hover:bg-zinc-700 text-white px-6 py-3 rounded-xl font-medium transition-all flex items-center gap-2">
+                                            <Play size={18} fill="currentColor" /> Assistir
+                                        </button>
+                                        <button onClick={handleDownloadVideo} className="bg-white hover:bg-zinc-200 text-black px-6 py-3 rounded-xl font-medium transition-all flex items-center gap-2 shadow-lg">
+                                            <Download size={18} /> Baixar
+                                        </button>
+                                     </>
+                                 )}
                              </div>
-                           </div>
-                           <div className="text-xs text-zinc-600 font-mono pt-1">
-                             ~{scene.duration_est}s
-                           </div>
                          </div>
-                       </div>
-                     ))}
-                   </div>
+
+                         {/* SCENE GALLERY GRID */}
+                         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                             {project.scenes.map((scene, idx) => (
+                                 <div key={idx} className="group relative aspect-video bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-lg transition-all hover:border-zinc-600 hover:shadow-2xl">
+                                     {/* IMAGE LAYER */}
+                                     {scene.imageUrl ? (
+                                         <img src={scene.imageUrl} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
+                                     ) : (
+                                         <div className="w-full h-full flex flex-col items-center justify-center bg-[#0F0F12]">
+                                             {scene.status === 'generating_visual' ? (
+                                                 <div className="flex flex-col items-center">
+                                                     <Loader2 className="animate-spin text-blue-500 mb-2" />
+                                                     <span className="text-xs text-blue-500 font-medium">Flash Gerando...</span>
+                                                 </div>
+                                             ) : <ImageIcon className="text-zinc-700" size={32} />}
+                                         </div>
+                                     )}
+                                     
+                                     {/* OVERLAYS */}
+                                     <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-6 pointer-events-none">
+                                          <p className="text-white font-medium text-sm line-clamp-2 mb-2">"{scene.narration}"</p>
+                                          <div className="flex items-center gap-2">
+                                              <span className={`h-2 w-2 rounded-full ${scene.audioUrl ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
+                                              <span className="text-xs text-zinc-400">{scene.audioUrl ? 'Áudio Pronto' : 'Processando Áudio...'}</span>
+                                          </div>
+                                     </div>
+
+                                     {/* BADGES */}
+                                     <div className="absolute top-3 left-3 bg-black/60 backdrop-blur-md border border-white/10 text-white text-[10px] font-bold px-2 py-1 rounded">
+                                         CENA {idx + 1}
+                                     </div>
+                                     {scene.status === 'generating_visual' && (
+                                         <div className="absolute inset-0 border-2 border-blue-500/50 rounded-2xl animate-pulse pointer-events-none"></div>
+                                     )}
+                                 </div>
+                             ))}
+                         </div>
+                      </div>
+                  )}
                 </div>
-
-                <div className="pt-6 border-t border-zinc-800 flex justify-end">
-                   <button 
-                     onClick={proceedToCode}
-                     className="bg-white text-black hover:bg-zinc-200 px-6 py-2.5 rounded-lg font-semibold flex items-center gap-2 transition-colors"
-                   >
-                     <Code size={18} />
-                     Gerar Sistema Python
-                   </button>
-                </div>
-
-              </div>
-            </div>
-          )}
-
-          {/* VIEW: CODE */}
-          {project && activeTab === 'code' && (
-            <div className="flex-1 overflow-auto p-8 custom-scrollbar bg-[#0d1117]">
-              <div className="max-w-5xl mx-auto">
-                 <div className="mb-8 p-4 bg-blue-900/10 border border-blue-500/20 rounded-lg">
-                   <h3 className="text-blue-400 font-bold flex items-center gap-2 mb-2">
-                     <Download size={18} /> Sistema Pronto para Deploy
-                   </h3>
-                   <p className="text-sm text-blue-200/70">
-                     Abaixo está o código-fonte completo para rodar este pipeline de geração de vídeo em sua máquina local ou servidor.
-                     Ele usa <strong>Edge-TTS</strong> (Gratuito), <strong>MoviePy</strong> (Gratuito) e requer uma API para imagens (ou você pode trocar pelo Stable Diffusion local).
-                   </p>
-                 </div>
-
-                 <CodeBlock 
-                    title="main.py" 
-                    lang="python" 
-                    code={getPythonCode(project)} 
-                 />
-
-                 <div className="grid grid-cols-2 gap-6">
-                   <CodeBlock 
-                      title="requirements.txt" 
-                      lang="text" 
-                      code={getRequirementsTxt()} 
-                   />
-                   <CodeBlock 
-                      title="docker-compose.yml" 
-                      lang="yaml" 
-                      code={`version: '3.8'
-services:
-  video-gen:
-    build: .
-    volumes:
-      - ./output:/app/output
-    command: python main.py
-`} 
-                   />
-                 </div>
-                 
-                 <CodeBlock 
-                    title="Dockerfile" 
-                    lang="dockerfile" 
-                    code={`FROM python:3.10-slim
-
-# Install system dependencies for MoviePy/FFmpeg
-RUN apt-get update && apt-get install -y \\
-    ffmpeg \\
-    imagemagick \\
-    libsm6 \\
-    libxext6 \\
-    && rm -rf /var/lib/apt/lists/*
-
-# Fix ImageMagick policy for MoviePy
-RUN sed -i 's/none/read,write/g' /etc/ImageMagick-6/policy.xml
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-CMD ["python", "main.py"]
-`} 
-                 />
-
-              </div>
-            </div>
-          )}
-
-        </div>
+             </div>
+        )}
 
       </main>
     </div>
