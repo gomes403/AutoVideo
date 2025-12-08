@@ -607,8 +607,11 @@ const App = () => {
 
   const processIdRef = useRef(0);
 
-  const startProcess = async () => {
-    if (!topic.trim()) { alert("Por favor, digite um tema para o vídeo."); return; }
+  const startProcess = async (topicOverride?: any) => {
+    // Allows topic override from clickable pills (checks if it's a string, not an event object)
+    const activeTopic = (typeof topicOverride === 'string' && topicOverride) ? topicOverride : topic;
+
+    if (!activeTopic.trim()) { alert("Por favor, digite um tema para o vídeo."); return; }
     
     const currentProcessId = processIdRef.current + 1;
     processIdRef.current = currentProcessId;
@@ -625,12 +628,12 @@ const App = () => {
     const musicUrl = MUSIC_LIBRARY.find(m => m.id === selectedMusic)?.url || '';
 
     setProject({ 
-      title: "Gerando...", description: "", tags: [], scenes: [], topic, 
+      title: "Gerando...", description: "", tags: [], scenes: [], topic: activeTopic, 
       status: 'scripting', backgroundMusicUrl: musicUrl
     });
 
     try {
-      const scriptData = await generateScript(topic, duration);
+      const scriptData = await generateScript(activeTopic, duration);
       
       clearInterval(interval);
       if (processIdRef.current !== currentProcessId) return;
@@ -648,7 +651,7 @@ const App = () => {
         description: scriptData.description || "",
         tags: Array.isArray(scriptData.tags) ? scriptData.tags : [],
         scenes: scenesWithStatus,
-        topic,
+        topic: activeTopic,
         status: 'review_script',
         backgroundMusicUrl: musicUrl
       });
@@ -866,7 +869,10 @@ const App = () => {
                         {INSPIRATION_EXAMPLES.map((ex, idx) => (
                              <div 
                                 key={idx} 
-                                onClick={() => setTopic(`Crie um vídeo cinematográfico sobre: ${ex.title}`)}
+                                onClick={() => {
+                                  setTopic(`Crie um vídeo cinematográfico sobre: ${ex.title}`);
+                                  startProcess(`Crie um vídeo cinematográfico sobre: ${ex.title}`);
+                                }}
                                 className="group relative aspect-[4/5] rounded-3xl overflow-hidden cursor-pointer bg-zinc-900 border border-zinc-800 hover:border-zinc-500 transition-all"
                              >
                                  <img src={ex.img} alt={ex.title} className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110 opacity-60 group-hover:opacity-100" />
@@ -887,7 +893,10 @@ const App = () => {
                         {POPULAR_IDEAS.map((idea, idx) => (
                             <button 
                                 key={idx}
-                                onClick={() => setTopic(idea.label)}
+                                onClick={() => {
+                                  setTopic(idea.label);
+                                  startProcess(idea.label);
+                                }}
                                 className="flex items-center gap-3 bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 pl-2 pr-5 py-2 rounded-full text-sm transition-all hover:border-zinc-600 group"
                             >
                                 <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-lg group-hover:scale-110 transition-transform">
