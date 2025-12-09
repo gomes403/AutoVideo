@@ -40,7 +40,10 @@ import {
   ArrowRightLeft,
   Volume2,
   Paperclip,
-  Type as TypeIcon
+  Type as TypeIcon,
+  Palette,
+  BrainCircuit,
+  Hourglass
 } from 'lucide-react';
 
 // --- CONSTANTS ---
@@ -60,7 +63,9 @@ const TRANSITIONS = [
 ];
 
 const FONT_SIZES = [
-  { label: 'Pequena', value: 30 },
+  { label: 'Micro', value: 20 },
+  { label: 'Discreta', value: 26 },
+  { label: 'Pequena', value: 32 },
   { label: 'Média', value: 42 },
   { label: 'Grande', value: 60 },
   { label: 'Enorme', value: 80 }
@@ -79,6 +84,15 @@ const INSPIRATION_EXAMPLES = [
   { title: "Futuro da IA", style: "Tech", img: "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?w=800&q=80" },
   { title: "Café da Manhã", style: "Lifestyle", img: "https://images.unsplash.com/photo-1493770348161-369560ae357d?w=800&q=80" },
   { title: "Viagem Espacial", style: "Cinematic", img: "https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?w=800&q=80" }
+];
+
+const ABSTRACT_BACKGROUNDS = [
+  "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?w=800&q=80",
+  "https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=800&q=80",
+  "https://images.unsplash.com/photo-1614850523459-c2f4c699c52e?w=800&q=80",
+  "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?w=800&q=80",
+  "https://images.unsplash.com/photo-1508615039623-a25605d2b022?w=800&q=80",
+  "https://images.unsplash.com/photo-1558591710-4b4a1ae0f04d?w=800&q=80"
 ];
 
 // --- TYPES ---
@@ -210,8 +224,9 @@ const drawSubtitles = (ctx: CanvasRenderingContext2D, text: string, width: numbe
      if (m.width > maxLineWidth) maxLineWidth = m.width;
   });
   
-  const paddingH = fontSize; // Scale padding with font
-  const paddingV = fontSize * 0.5;
+  // Tighter padding for a more compact box
+  const paddingH = fontSize * 0.6; 
+  const paddingV = fontSize * 0.3;
   const boxWidth = maxLineWidth + (paddingH * 2);
   const totalHeight = (lines.length * lineHeight) + (paddingV * 2);
   
@@ -646,6 +661,22 @@ const generateSceneVisualKeyframe = async (prompt: string): Promise<string> => {
 
 // --- COMPONENTS ---
 
+const Timer = ({ startTime }: { startTime: number }) => {
+  const [elapsed, setElapsed] = useState(0);
+  
+  useEffect(() => {
+    setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [startTime]);
+  
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  return <span>{mins}:{secs.toString().padStart(2, '0')}</span>;
+};
+
 const StepIcon = ({ step, current, label, subLabel }: any) => {
   const steps = ['idle', 'scripting', 'review_script', 'producing', 'completed'];
   const currentIndex = steps.indexOf(current);
@@ -765,6 +796,64 @@ const VideoPlayer = ({ scenes, onClose, withSubtitles }: { scenes: Scene[], onCl
   );
 };
 
+const NewStyleModal = ({ onClose, onSave }: { onClose: () => void, onSave: (title: string, style: string) => void }) => {
+  const [title, setTitle] = useState('');
+  const [style, setStyle] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (title && style) onSave(title, style);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[9999] bg-black/90 flex flex-col items-center justify-center p-4 backdrop-blur-sm">
+       <div className="w-full max-w-md bg-[#0F0F12] border border-zinc-800 rounded-3xl p-8 shadow-2xl relative">
+          <button onClick={onClose} className="absolute top-4 right-4 text-zinc-500 hover:text-white transition-colors">
+            <X size={20} />
+          </button>
+          
+          <div className="text-center mb-8">
+            <div className="w-12 h-12 bg-zinc-900 rounded-full flex items-center justify-center mx-auto mb-4 border border-zinc-800">
+              <Palette size={24} className="text-blue-500" />
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-2">Novo Estilo</h2>
+            <p className="text-zinc-500 text-sm">Crie um template personalizado para seus próximos vídeos.</p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-zinc-500 uppercase mb-2 ml-1">Título do Vídeo (Exemplo)</label>
+              <input 
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Ex: Minha Viagem, Review de Produto..."
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500/50 transition-all"
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-zinc-500 uppercase mb-2 ml-1">Categoria Visual</label>
+              <input 
+                value={style}
+                onChange={(e) => setStyle(e.target.value)}
+                placeholder="Ex: Minimalista, Cyberpunk, Anos 80, Aquarela..."
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-white placeholder-zinc-600 focus:outline-none focus:border-blue-500/50 transition-all"
+              />
+            </div>
+            
+            <button 
+              type="submit"
+              disabled={!title || !style}
+              className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl transition-all mt-4"
+            >
+              Criar Estilo
+            </button>
+          </form>
+       </div>
+    </div>
+  );
+};
+
 const App = () => {
   const [topic, setTopic] = useState("");
   const [duration, setDuration] = useState("3 a 5 minutos");
@@ -781,6 +870,13 @@ const App = () => {
   const [showPlayer, setShowPlayer] = useState(false);
   const [rendering, setRendering] = useState(false);
   const [renderProgress, setRenderProgress] = useState(0);
+  
+  // Timer state
+  const [productionStartTime, setProductionStartTime] = useState<number | null>(null);
+
+  // Styles State
+  const [styles, setStyles] = useState(INSPIRATION_EXAMPLES);
+  const [showNewStyleModal, setShowNewStyleModal] = useState(false);
 
   // Audio Preview State
   const [playingSceneId, setPlayingSceneId] = useState<number | null>(null);
@@ -865,6 +961,7 @@ const App = () => {
   const startProduction = async () => {
     if (!project) return;
     
+    setProductionStartTime(Date.now()); // Inicia o contador global
     setProject(prev => prev ? { ...prev, status: 'producing' } : null);
     setActiveTab('production');
 
@@ -999,13 +1096,25 @@ const App = () => {
     setRenderProgress(0);
     setPlayingSceneId(null);
     setAudioLoadingId(null);
+    setProductionStartTime(null);
     if(previewAudioRef.current) previewAudioRef.current.pause();
     if(fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleAddStyle = (title: string, style: string) => {
+    const randomBg = ABSTRACT_BACKGROUNDS[Math.floor(Math.random() * ABSTRACT_BACKGROUNDS.length)];
+    const newStyle = { title, style, img: randomBg };
+    setStyles([...styles, newStyle]);
+    setShowNewStyleModal(false);
   };
 
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col font-sans selection:bg-blue-500/30">
       
+      {showNewStyleModal && (
+        <NewStyleModal onClose={() => setShowNewStyleModal(false)} onSave={handleAddStyle} />
+      )}
+
       {showPlayer && project && (
         <VideoPlayer scenes={project.scenes} withSubtitles={withSubtitles} onClose={() => setShowPlayer(false)} />
       )}
@@ -1194,7 +1303,7 @@ const App = () => {
                     
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div 
-                           onClick={() => setTopic("")}
+                           onClick={() => setShowNewStyleModal(true)}
                            className="group relative aspect-[4/5] rounded-3xl border-2 border-dashed border-zinc-800 hover:border-zinc-600 bg-transparent flex flex-col items-center justify-center cursor-pointer transition-all hover:bg-zinc-900/50"
                         >
                              <div className="w-12 h-12 rounded-full bg-zinc-900 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
@@ -1203,12 +1312,13 @@ const App = () => {
                              <span className="text-zinc-400 font-medium">Novo Estilo</span>
                         </div>
 
-                        {INSPIRATION_EXAMPLES.map((ex, idx) => (
+                        {styles.map((ex, idx) => (
                              <div 
                                 key={idx} 
                                 onClick={() => {
-                                  setTopic(`Crie um vídeo cinematográfico sobre: ${ex.title}`);
-                                  startProcess(`Crie um vídeo cinematográfico sobre: ${ex.title}`);
+                                  const prompt = `Crie um vídeo estilo ${ex.style} sobre: ${ex.title}`;
+                                  setTopic(prompt);
+                                  startProcess(prompt);
                                 }}
                                 className="group relative aspect-[4/5] rounded-3xl overflow-hidden cursor-pointer bg-zinc-900 border border-zinc-800 hover:border-zinc-500 transition-all"
                              >
@@ -1245,6 +1355,37 @@ const App = () => {
                     </div>
                 </div>
             </div>
+        )}
+
+        {/* === LOADING SCREEN === */}
+        {loading && (
+          <div className="flex-1 flex flex-col items-center justify-center p-6 animate-in fade-in duration-700">
+             <div className="relative mb-8">
+                <div className="absolute inset-0 bg-blue-500 blur-3xl opacity-20 animate-pulse"></div>
+                <div className="w-24 h-24 bg-zinc-900 rounded-3xl border border-zinc-800 flex items-center justify-center shadow-2xl relative z-10">
+                   <Loader2 size={48} className="text-blue-500 animate-spin" />
+                </div>
+                <div className="absolute -bottom-2 -right-2 bg-zinc-800 p-2 rounded-full border border-zinc-700">
+                   <Sparkles size={20} className="text-yellow-400 fill-yellow-400" />
+                </div>
+             </div>
+
+             <h2 className="text-3xl font-bold text-white mb-2">Criando seu Roteiro</h2>
+             <p className="text-zinc-500 text-lg mb-8 max-w-md text-center">
+                {loadingProgress < 30 ? "Analisando o tema e contexto..." :
+                 loadingProgress < 60 ? "Estruturando cenas cinematográficas..." :
+                 loadingProgress < 90 ? "Escrevendo narrações envolventes..." :
+                 "Finalizando detalhes do projeto..."}
+             </p>
+
+             <div className="w-full max-w-md h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-blue-500 transition-all duration-300 ease-out shadow-[0_0_10px_rgba(59,130,246,0.5)]"
+                  style={{ width: `${loadingProgress}%` }}
+                ></div>
+             </div>
+             <p className="mt-4 text-zinc-600 font-mono text-sm">{loadingProgress}%</p>
+          </div>
         )}
 
         {/* === PROJECT WORKSPACE === */}
@@ -1420,13 +1561,30 @@ const App = () => {
                                      {scene.imageUrl ? (
                                          <img src={scene.imageUrl} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
                                      ) : (
-                                         <div className="w-full h-full flex flex-col items-center justify-center bg-[#0F0F12]">
-                                             {scene.status === 'generating_visual' ? (
-                                                 <div className="flex flex-col items-center">
-                                                     <Loader2 className="animate-spin text-blue-500 mb-2" />
-                                                     <span className="text-xs text-blue-500 font-medium">Flash Gerando...</span>
+                                         <div className="w-full h-full flex flex-col items-center justify-center bg-[#0F0F12] p-4 text-center">
+                                             {scene.status === 'generating_visual' || scene.status === 'generating_audio' ? (
+                                                 <div className="flex flex-col items-center gap-2">
+                                                     <Loader2 className="animate-spin text-blue-500" size={32} />
+                                                     <span className="text-xs text-blue-400 font-medium animate-pulse">
+                                                        {scene.status === 'generating_audio' ? 'Criando Áudio...' : 'Gerando Visual...'}
+                                                     </span>
+                                                     {productionStartTime && (
+                                                        <div className="font-mono text-xs text-zinc-500 bg-zinc-900 px-2 py-1 rounded border border-zinc-800 mt-2">
+                                                            <Timer startTime={productionStartTime} />
+                                                        </div>
+                                                     )}
                                                  </div>
-                                             ) : <ImageIcon className="text-zinc-700" size={32} />}
+                                             ) : (
+                                                <div className="flex flex-col items-center gap-2 text-zinc-700">
+                                                    <Hourglass size={32} className="opacity-50" />
+                                                    <span className="text-xs font-medium">Aguardando...</span>
+                                                    {productionStartTime && (
+                                                        <div className="font-mono text-xs text-zinc-600 bg-zinc-900 px-2 py-1 rounded border border-zinc-800 mt-2">
+                                                            <Timer startTime={productionStartTime} />
+                                                        </div>
+                                                     )}
+                                                </div>
+                                             )}
                                          </div>
                                      )}
                                      
