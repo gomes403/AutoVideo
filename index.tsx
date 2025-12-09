@@ -35,7 +35,12 @@ import {
   Check,
   Video,
   Layers,
-  MoreHorizontal
+  MoreHorizontal,
+  Captions,
+  ArrowRightLeft,
+  Volume2,
+  Paperclip,
+  Type as TypeIcon
 } from 'lucide-react';
 
 // --- CONSTANTS ---
@@ -45,6 +50,20 @@ const MUSIC_LIBRARY = [
   { id: 'ambient', name: 'Chill Ambient', url: 'https://cdn.pixabay.com/audio/2022/05/27/audio_1808fbf07a.mp3' },
   { id: 'upbeat', name: 'Tech Corporate', url: 'https://cdn.pixabay.com/audio/2024/01/16/audio_e2b992254f.mp3' },
   { id: 'cinematic', name: 'Cinematic Drama', url: 'https://cdn.pixabay.com/audio/2022/03/24/audio_07806f1562.mp3' }
+];
+
+const TRANSITIONS = [
+  { id: 'crossfade', name: 'Crossfade' },
+  { id: 'fade_black', name: 'Fade to Black' },
+  { id: 'slide', name: 'Slide Left' },
+  { id: 'none', name: 'Corte Seco' }
+];
+
+const FONT_SIZES = [
+  { label: 'Pequena', value: 30 },
+  { label: 'Média', value: 42 },
+  { label: 'Grande', value: 60 },
+  { label: 'Enorme', value: 80 }
 ];
 
 const POPULAR_IDEAS = [
@@ -142,6 +161,91 @@ const getSupportedMimeType = () => {
     }
   }
   return ''; 
+};
+
+// Draw rounded rect helper
+const drawRoundedRect = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.fill();
+};
+
+const drawSubtitles = (ctx: CanvasRenderingContext2D, text: string, width: number, height: number, fontSize: number) => {
+  ctx.font = `600 ${fontSize}px "Inter", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  
+  const maxWidth = width * 0.85;
+  const lineHeight = fontSize * 1.3;
+  const words = text.split(' ');
+  const lines: string[] = [];
+  let line = '';
+
+  for (let n = 0; n < words.length; n++) {
+    const testLine = line + words[n] + ' ';
+    const metrics = ctx.measureText(testLine);
+    const testWidth = metrics.width;
+    if (testWidth > maxWidth && n > 0) {
+      lines.push(line);
+      line = words[n] + ' ';
+    } else {
+      line = testLine;
+    }
+  }
+  lines.push(line);
+
+  // Calculate box dimensions
+  let maxLineWidth = 0;
+  lines.forEach(l => {
+     const m = ctx.measureText(l);
+     if (m.width > maxLineWidth) maxLineWidth = m.width;
+  });
+  
+  const paddingH = fontSize; // Scale padding with font
+  const paddingV = fontSize * 0.5;
+  const boxWidth = maxLineWidth + (paddingH * 2);
+  const totalHeight = (lines.length * lineHeight) + (paddingV * 2);
+  
+  // Position: Bottom with margin
+  const marginBottom = 80;
+  const startY = height - marginBottom - totalHeight;
+  const startX = (width - boxWidth) / 2;
+
+  // Shadow/Blur for box
+  ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
+  ctx.shadowBlur = 10;
+  
+  // Draw Box
+  ctx.fillStyle = "rgba(0, 0, 0, 0.65)"; // Darker background
+  drawRoundedRect(ctx, startX, startY, boxWidth, totalHeight, 24);
+  
+  // Reset shadow
+  ctx.shadowBlur = 0;
+  
+  // Draw Text
+  ctx.fillStyle = "#ffffff";
+  lines.forEach((l, i) => {
+      // Add slight drop shadow to text for contrast
+      ctx.shadowColor = "black";
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 2;
+      ctx.shadowOffsetY = 2;
+      
+      ctx.fillText(l.trim(), width / 2, startY + paddingV + (i * lineHeight));
+      
+      // Clear text shadow
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+  });
 };
 
 // Advanced Motion Engine to simulate Video Clips
@@ -261,7 +365,14 @@ const preloadAssets = async (scenes: Scene[], musicUrl: string | undefined, audi
   return { images, audioBuffers, musicBuffer };
 };
 
-const renderVideoInBrowser = async (scenes: Scene[], musicUrl: string | undefined, onProgress: (p: number) => void): Promise<Blob> => {
+const renderVideoInBrowser = async (
+  scenes: Scene[], 
+  musicUrl: string | undefined, 
+  withSubtitles: boolean,
+  transitionType: string,
+  subtitleFontSize: number,
+  onProgress: (p: number) => void
+): Promise<Blob> => {
   console.log("Starting final montage (Flash Engine)...");
   
   const canvas = document.createElement('canvas');
@@ -339,7 +450,8 @@ const renderVideoInBrowser = async (scenes: Scene[], musicUrl: string | undefine
 
       const fps = 30;
       const totalFrames = Math.ceil(duration * fps);
-      const transitionFrames = 30; // 1 second overlap
+      // Determine overlap/transition duration
+      const transitionFrames = (transitionType === 'none') ? 0 : 30;
       
       for (let frame = 0; frame < totalFrames; frame++) {
           const progress = frame / totalFrames;
@@ -348,19 +460,48 @@ const renderVideoInBrowser = async (scenes: Scene[], musicUrl: string | undefine
           ctx.fillStyle = "#000";
           ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-          // Draw Current Clip
-          drawSceneFrame(ctx, imgElement, scene.movement, scene.narration, progress, 1.0);
+          const isTransitioning = nextImgElement && frame > totalFrames - transitionFrames;
 
-          // Crossfade to Next Clip
-          if (nextImgElement && frame > totalFrames - transitionFrames) {
-               const transProgress = (frame - (totalFrames - transitionFrames)) / transitionFrames;
-               drawSceneFrame(ctx, nextImgElement, scenes[i+1].movement, scenes[i+1].narration, 0, transProgress);
+          if (!isTransitioning) {
+             // Standard Draw
+             drawSceneFrame(ctx, imgElement, scene.movement, scene.narration, progress, 1.0);
+          } else {
+             // Handle Transition Logic
+             const t = (frame - (totalFrames - transitionFrames)) / transitionFrames; // 0.0 -> 1.0
+
+             if (transitionType === 'fade_black') {
+                if (t < 0.5) {
+                    // Fade Out A
+                    drawSceneFrame(ctx, imgElement, scene.movement, scene.narration, progress, 1.0 - (t * 2));
+                } else {
+                    // Fade In B
+                    drawSceneFrame(ctx, nextImgElement, scenes[i+1].movement, scenes[i+1].narration, 0, (t - 0.5) * 2);
+                }
+             } else if (transitionType === 'slide') {
+                 // Draw A normally
+                 drawSceneFrame(ctx, imgElement, scene.movement, scene.narration, progress, 1.0);
+                 // Draw B Sliding in from Right to Left
+                 ctx.save();
+                 const slideX = canvas.width * (1 - t);
+                 ctx.translate(slideX, 0);
+                 drawSceneFrame(ctx, nextImgElement, scenes[i+1].movement, scenes[i+1].narration, 0, 1.0);
+                 ctx.restore();
+             } else {
+                // Default: Crossfade
+                drawSceneFrame(ctx, imgElement, scene.movement, scene.narration, progress, 1.0);
+                drawSceneFrame(ctx, nextImgElement, scenes[i+1].movement, scenes[i+1].narration, 0, t);
+             }
           }
 
           // Grain/Noise overlay for "Real" feel
           const noise = Math.floor(Math.random() * 15);
           ctx.fillStyle = `rgba(${noise}, ${noise}, ${noise}, 0.02)`;
           ctx.fillRect(0, 0, canvas.width, canvas.height);
+          
+          // Draw Subtitles if enabled
+          if (withSubtitles) {
+              drawSubtitles(ctx, scene.narration, canvas.width, canvas.height, subtitleFontSize);
+          }
 
           await new Promise(r => setTimeout(r, 1000 / fps));
       }
@@ -382,7 +523,7 @@ const initAI = () => {
 // Init immediately for first load
 initAI();
 
-const generateScript = async (topic: string, duration: string): Promise<any> => {
+const generateScript = async (topic: string, duration: string, imageBase64?: string): Promise<any> => {
   initAI(); // Ensure fresh instance
   const systemPrompt = `
   You are a professional film director.
@@ -417,9 +558,27 @@ const generateScript = async (topic: string, duration: string): Promise<any> => 
   let attempts = 0;
   while (attempts < 3) {
     try {
+      let contents: any;
+      
+      if (imageBase64) {
+          // Multimodal Prompt
+          const base64Data = imageBase64.split(',')[1];
+          const mimeType = imageBase64.substring(imageBase64.indexOf(':') + 1, imageBase64.indexOf(';'));
+          contents = {
+            parts: [
+              { text: systemPrompt },
+              { text: "INSTRUCTION FOR IMAGE: Use the attached image as visual reference for the style, color palette, or subject matter of the video scenes." },
+              { inlineData: { mimeType, data: base64Data } }
+            ]
+          };
+      } else {
+          // Text-only Prompt
+          contents = systemPrompt;
+      }
+
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
-        contents: systemPrompt,
+        contents: contents,
         config: { responseMimeType: "application/json" }
       });
       let cleanJson = response.text.trim().replace(/```json/g, '').replace(/```/g, '');
@@ -443,17 +602,29 @@ const generateScript = async (topic: string, duration: string): Promise<any> => 
 
 const generateSceneAssetAudio = async (text: string): Promise<string> => {
     initAI();
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: text }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
-      },
-    });
-    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!base64Audio) throw new Error("No audio");
-    return pcmToWav(base64Audio, 24000); 
+    if (!text || !text.trim()) return ""; // Safeguard for empty strings
+    
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            const response = await ai.models.generateContent({
+              model: "gemini-2.5-flash-preview-tts",
+              contents: [{ parts: [{ text: text }] }],
+              config: {
+                responseModalities: ['AUDIO' as Modality],
+                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+              },
+            });
+            const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+            if (!base64Audio) throw new Error("No audio data received");
+            return pcmToWav(base64Audio, 24000); 
+        } catch (e) {
+            console.warn(`TTS Attempt ${attempt + 1} failed:`, e);
+            lastError = e;
+            if (attempt < 2) await new Promise(r => setTimeout(r, 1500)); // Backoff
+        }
+    }
+    throw lastError;
 };
 
 // Use Gemini Flash for Image Generation (Free-tier friendly)
@@ -503,7 +674,7 @@ const StepIcon = ({ step, current, label, subLabel }: any) => {
   );
 };
 
-const VideoPlayer = ({ scenes, onClose }: { scenes: Scene[], onClose: () => void }) => {
+const VideoPlayer = ({ scenes, onClose, withSubtitles }: { scenes: Scene[], onClose: () => void, withSubtitles: boolean }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -566,11 +737,13 @@ const VideoPlayer = ({ scenes, onClose }: { scenes: Scene[], onClose: () => void
             </div>
         )}
         
-        <div className="absolute bottom-16 left-0 right-0 text-center px-8 z-20">
-            <span className="inline-block bg-black/50 text-white px-6 py-3 rounded-2xl text-xl font-medium backdrop-blur-md border border-white/10 shadow-lg max-w-4xl">
-                {currentScene?.narration}
-            </span>
-        </div>
+        {withSubtitles && (
+          <div className="absolute bottom-16 left-0 right-0 text-center px-8 z-20">
+              <span className="inline-block bg-black/65 text-white px-6 py-3 rounded-2xl text-xl font-medium backdrop-blur-md border border-white/10 shadow-lg max-w-4xl">
+                  {currentScene?.narration}
+              </span>
+          </div>
+        )}
 
         <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-zinc-800 z-30">
             <div className="h-full bg-blue-500 transition-all duration-300 shadow-[0_0_15px_rgba(59,130,246,0.6)]" style={{ width: `${((currentIndex + 1) / scenes.length) * 100}%` }}></div>
@@ -596,6 +769,10 @@ const App = () => {
   const [topic, setTopic] = useState("");
   const [duration, setDuration] = useState("3 a 5 minutos");
   const [selectedMusic, setSelectedMusic] = useState<string>("ambient");
+  const [selectedTransition, setSelectedTransition] = useState<string>("crossfade");
+  const [withSubtitles, setWithSubtitles] = useState(true);
+  const [subtitleFontSize, setSubtitleFontSize] = useState<number>(42);
+  const [attachment, setAttachment] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0); 
@@ -605,13 +782,32 @@ const App = () => {
   const [rendering, setRendering] = useState(false);
   const [renderProgress, setRenderProgress] = useState(0);
 
+  // Audio Preview State
+  const [playingSceneId, setPlayingSceneId] = useState<number | null>(null);
+  const [audioLoadingId, setAudioLoadingId] = useState<number | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const processIdRef = useRef(0);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            if (event.target?.result) {
+                setAttachment(event.target.result as string);
+            }
+        };
+        reader.readAsDataURL(file);
+    }
+  };
 
   const startProcess = async (topicOverride?: any) => {
     // Allows topic override from clickable pills (checks if it's a string, not an event object)
     const activeTopic = (typeof topicOverride === 'string' && topicOverride) ? topicOverride : topic;
 
-    if (!activeTopic.trim()) { alert("Por favor, digite um tema para o vídeo."); return; }
+    if (!activeTopic.trim() && !attachment) { alert("Por favor, digite um tema ou adicione uma imagem."); return; }
     
     const currentProcessId = processIdRef.current + 1;
     processIdRef.current = currentProcessId;
@@ -633,7 +829,7 @@ const App = () => {
     });
 
     try {
-      const scriptData = await generateScript(activeTopic, duration);
+      const scriptData = await generateScript(activeTopic || "Video inspired by the attached image", duration, attachment || undefined);
       
       clearInterval(interval);
       if (processIdRef.current !== currentProcessId) return;
@@ -707,13 +903,69 @@ const App = () => {
     setProject(prev => prev ? { ...prev, status: 'completed' } : null);
   };
 
+  const handlePreviewAudio = async (sceneIndex: number) => {
+    const scene = project?.scenes[sceneIndex];
+    if (!scene) return;
+
+    // Stop if playing this one
+    if (playingSceneId === scene.id) {
+        previewAudioRef.current?.pause();
+        setPlayingSceneId(null);
+        return;
+    }
+
+    // Stop others
+    if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        setPlayingSceneId(null);
+    }
+
+    let url = scene.audioUrl;
+
+    // Generate if missing
+    if (!url) {
+        setAudioLoadingId(scene.id);
+        try {
+            url = await generateSceneAssetAudio(scene.narration);
+            // Update state to save this url so we don't regen
+            setProject(prev => {
+                if (!prev) return null;
+                const newScenes = [...prev.scenes];
+                newScenes[sceneIndex] = { ...newScenes[sceneIndex], audioUrl: url };
+                return { ...prev, scenes: newScenes };
+            });
+        } catch (e) {
+            alert("Erro ao gerar áudio de prévia.");
+            setAudioLoadingId(null);
+            return;
+        }
+        setAudioLoadingId(null);
+    }
+
+    // Play
+    if (url) {
+        const audio = new Audio(url);
+        previewAudioRef.current = audio;
+        setPlayingSceneId(scene.id);
+        audio.play();
+        audio.onended = () => setPlayingSceneId(null);
+    }
+  };
+
   const handleRenderVideo = async () => {
       if (!project) return;
       setRendering(true);
       setRenderProgress(0);
       try {
           await new Promise(r => setTimeout(r, 100));
-          const blob = await renderVideoInBrowser(project.scenes, project.backgroundMusicUrl, (p) => setRenderProgress(p));
+          const blob = await renderVideoInBrowser(
+              project.scenes, 
+              project.backgroundMusicUrl, 
+              withSubtitles, 
+              selectedTransition,
+              subtitleFontSize,
+              (p) => setRenderProgress(p)
+          );
           setProject(prev => prev ? { ...prev, videoBlob: blob } : null);
       } catch (e) {
           alert("Erro na montagem do vídeo.");
@@ -737,17 +989,25 @@ const App = () => {
     setLoading(false);
     setDuration("3 a 5 minutos");
     setSelectedMusic("ambient");
+    setSelectedTransition("crossfade");
+    setWithSubtitles(true);
+    setSubtitleFontSize(42);
+    setAttachment(null);
     setActiveTab('workflow');
     setShowPlayer(false);
     setRendering(false);
     setRenderProgress(0);
+    setPlayingSceneId(null);
+    setAudioLoadingId(null);
+    if(previewAudioRef.current) previewAudioRef.current.pause();
+    if(fileInputRef.current) fileInputRef.current.value = "";
   };
 
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col font-sans selection:bg-blue-500/30">
       
       {showPlayer && project && (
-        <VideoPlayer scenes={project.scenes} onClose={() => setShowPlayer(false)} />
+        <VideoPlayer scenes={project.scenes} withSubtitles={withSubtitles} onClose={() => setShowPlayer(false)} />
       )}
 
       {/* NAV HEADER */}
@@ -786,65 +1046,142 @@ const App = () => {
                   </p>
                 </div>
 
-                {/* MAGIC INPUT BAR */}
-                <div className="w-full max-w-4xl relative group z-30">
-                    <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-3xl opacity-30 group-hover:opacity-50 blur transition duration-500"></div>
-                    <div className="relative bg-[#0F0F12] border border-zinc-800 rounded-3xl p-2 shadow-2xl flex items-start md:items-center gap-2 flex-col md:flex-row transition-all group-focus-within:border-blue-500/50">
+                {/* MAGIC INPUT BAR CONTAINER */}
+                <div className="w-full max-w-4xl z-30 flex flex-col gap-6">
+
+                    {/* ROW 1: INPUT + BUTTON */}
+                    <div className="relative group w-full">
+                        <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-3xl opacity-30 group-hover:opacity-50 blur transition duration-500"></div>
+                        <div className="relative bg-[#0F0F12] border border-zinc-800 rounded-3xl p-2 shadow-2xl flex items-center gap-2 transition-all group-focus-within:border-blue-500/50">
+                            
+                            {/* Attachment Button */}
+                            <button 
+                                onClick={() => fileInputRef.current?.click()}
+                                className="p-3 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-2xl transition-all"
+                                title="Anexar imagem de referência"
+                            >
+                                <Paperclip size={20} />
+                            </button>
+                            <input 
+                                type="file" 
+                                ref={fileInputRef} 
+                                hidden 
+                                onChange={handleFileSelect} 
+                                accept="image/*" 
+                            />
+
+                            {/* Image Preview */}
+                            {attachment && (
+                                <div className="relative group/preview animate-in fade-in zoom-in duration-300">
+                                    <img src={attachment} className="h-10 w-10 rounded-lg object-cover border border-zinc-700 shadow-sm" />
+                                    <button 
+                                        onClick={() => { setAttachment(null); if(fileInputRef.current) fileInputRef.current.value=""; }}
+                                        className="absolute -top-2 -right-2 bg-black text-white rounded-full p-0.5 opacity-0 group-hover/preview:opacity-100 transition-opacity border border-zinc-700"
+                                    >
+                                        <X size={10} />
+                                    </button>
+                                </div>
+                            )}
+
+                            <input
+                                type="text"
+                                value={topic}
+                                onChange={(e) => setTopic(e.target.value)}
+                                placeholder="Sobre o que é o seu vídeo hoje?"
+                                className="flex-1 bg-transparent text-white text-lg p-4 outline-none placeholder-zinc-600 font-medium w-full"
+                                onKeyDown={(e) => e.key === 'Enter' && startProcess()}
+                            />
+
+                            <button 
+                                onClick={startProcess}
+                                disabled={!topic.trim() && !attachment}
+                                className="bg-white hover:bg-blue-50 text-black p-4 rounded-2xl transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:scale-105 shadow-lg flex-shrink-0"
+                            >
+                                <ArrowRight size={24} />
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* ROW 2: OPTIONS */}
+                    <div className="flex items-center justify-center gap-3 flex-wrap">
                         
-                        <div className="flex-1 flex flex-col w-full">
-                          <input
-                              type="text"
-                              value={topic}
-                              onChange={(e) => setTopic(e.target.value)}
-                              placeholder="Sobre o que é o seu vídeo hoje?"
-                              className="w-full bg-transparent text-white text-lg p-4 outline-none placeholder-zinc-600 font-medium"
-                              onKeyDown={(e) => e.key === 'Enter' && startProcess()}
-                          />
-                        </div>
-
                         {/* Config Pills */}
-                        <div className="flex items-center gap-2 px-2 pb-2 md:pb-0 w-full md:w-auto overflow-x-auto scrollbar-hide">
-                            <div className="relative flex-shrink-0">
-                                <div className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-4 py-2.5 rounded-xl text-sm font-medium cursor-pointer border border-zinc-800 transition-colors">
-                                    <Clock size={16} className="text-blue-500" />
-                                    <span>{duration}</span>
-                                    <ChevronDown size={14} className="opacity-50" />
-                                </div>
-                                <select 
-                                    value={duration}
-                                    onChange={(e) => setDuration(e.target.value)}
-                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                                >
-                                    <option value="3 a 5 minutos">3 a 5 Minutos</option>
-                                    <option value="1 minuto (Shorts)">1 Minuto (Shorts)</option>
-                                </select>
+                        <div className="relative flex-shrink-0">
+                            <div className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-4 py-2.5 rounded-xl text-sm font-medium cursor-pointer border border-zinc-800 transition-colors">
+                                <Clock size={16} className="text-blue-500" />
+                                <span>{duration}</span>
+                                <ChevronDown size={14} className="opacity-50" />
                             </div>
-
-                            <div className="relative flex-shrink-0">
-                                <div className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-4 py-2.5 rounded-xl text-sm font-medium cursor-pointer border border-zinc-800 transition-colors">
-                                    <Music size={16} className="text-purple-500" />
-                                    <span className="truncate max-w-[100px]">{MUSIC_LIBRARY.find(m => m.id === selectedMusic)?.name || 'Música'}</span>
-                                    <ChevronDown size={14} className="opacity-50" />
-                                </div>
-                                <select 
-                                    value={selectedMusic}
-                                    onChange={(e) => setSelectedMusic(e.target.value)}
-                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                                >
-                                    {MUSIC_LIBRARY.map(m => (
-                                        <option key={m.id} value={m.id}>{m.name}</option>
-                                    ))}
-                                </select>
-                            </div>
+                            <select 
+                                value={duration}
+                                onChange={(e) => setDuration(e.target.value)}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            >
+                                <option value="3 a 5 minutos">3 a 5 Minutos</option>
+                                <option value="1 minuto (Shorts)">1 Minuto (Shorts)</option>
+                            </select>
                         </div>
 
-                        <button 
-                            onClick={startProcess}
-                            disabled={!topic.trim()}
-                            className="bg-white hover:bg-blue-50 text-black p-4 rounded-2xl transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:scale-105 shadow-lg flex-shrink-0"
-                        >
-                            <ArrowRight size={24} />
-                        </button>
+                        <div className="relative flex-shrink-0">
+                            <div className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-4 py-2.5 rounded-xl text-sm font-medium cursor-pointer border border-zinc-800 transition-colors">
+                                <Music size={16} className="text-purple-500" />
+                                <span className="truncate max-w-[100px]">{MUSIC_LIBRARY.find(m => m.id === selectedMusic)?.name || 'Música'}</span>
+                                <ChevronDown size={14} className="opacity-50" />
+                            </div>
+                            <select 
+                                value={selectedMusic}
+                                onChange={(e) => setSelectedMusic(e.target.value)}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            >
+                                {MUSIC_LIBRARY.map(m => (
+                                    <option key={m.id} value={m.id}>{m.name}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div className="relative flex-shrink-0">
+                            <div className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-4 py-2.5 rounded-xl text-sm font-medium cursor-pointer border border-zinc-800 transition-colors">
+                                <ArrowRightLeft size={16} className="text-orange-500" />
+                                <span className="truncate max-w-[100px]">{TRANSITIONS.find(t => t.id === selectedTransition)?.name || 'Transição'}</span>
+                                <ChevronDown size={14} className="opacity-50" />
+                            </div>
+                            <select 
+                                value={selectedTransition}
+                                onChange={(e) => setSelectedTransition(e.target.value)}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            >
+                                {TRANSITIONS.map(t => (
+                                    <option key={t.id} value={t.id}>{t.name}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div className="relative flex-shrink-0">
+                            <div className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-4 py-2.5 rounded-xl text-sm font-medium cursor-pointer border border-zinc-800 transition-colors">
+                                <TypeIcon size={16} className="text-pink-500" />
+                                <span>{FONT_SIZES.find(f => f.value === subtitleFontSize)?.label || 'Fonte'}</span>
+                                <ChevronDown size={14} className="opacity-50" />
+                            </div>
+                            <select 
+                                value={subtitleFontSize}
+                                onChange={(e) => setSubtitleFontSize(Number(e.target.value))}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            >
+                                {FONT_SIZES.map(f => (
+                                    <option key={f.value} value={f.value}>{f.label}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div className="relative flex-shrink-0">
+                            <button 
+                                onClick={() => setWithSubtitles(!withSubtitles)}
+                                className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 px-4 py-2.5 rounded-xl text-sm font-medium cursor-pointer border border-zinc-800 transition-colors"
+                            >
+                                <Captions size={16} className={withSubtitles ? "text-green-500" : "text-zinc-500"} />
+                                <span>{withSubtitles ? 'Com Legendas' : 'Sem Legendas'}</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -907,22 +1244,6 @@ const App = () => {
                         ))}
                     </div>
                 </div>
-            </div>
-        )}
-
-        {/* === LOADING STATE === */}
-        {loading && (
-            <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
-              <div className="relative">
-                <div className="absolute inset-0 bg-blue-500 blur-3xl opacity-20 rounded-full"></div>
-                <Loader2 size={64} className="text-blue-500 animate-spin relative z-10" />
-              </div>
-              <h3 className="text-2xl font-bold text-white mt-8 mb-2">Criando Roteiro...</h3>
-              <p className="text-zinc-500 max-w-md">A IA está dividindo sua ideia em cenas visuais e escrevendo a narração perfeita.</p>
-              
-              <div className="w-64 h-1.5 bg-zinc-900 rounded-full mt-8 overflow-hidden">
-                 <div className="h-full bg-blue-600 rounded-full transition-all duration-300" style={{ width: `${loadingProgress}%` }}></div>
-              </div>
             </div>
         )}
 
@@ -1006,6 +1327,20 @@ const App = () => {
                                                       {scene.movement}
                                                   </span>
                                                   <span className="text-zinc-600 text-xs flex items-center gap-1"><Clock size={10} /> ~{scene.duration_est}s</span>
+                                                  
+                                                  <button 
+                                                      onClick={() => handlePreviewAudio(idx)}
+                                                      className="ml-2 w-6 h-6 rounded-full bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center transition-colors border border-zinc-700 group/audio"
+                                                      title="Pré-visualizar Narração"
+                                                  >
+                                                      {audioLoadingId === scene.id ? (
+                                                          <Loader2 size={12} className="animate-spin text-blue-500" />
+                                                      ) : playingSceneId === scene.id ? (
+                                                          <PauseCircle size={12} className="text-green-500" />
+                                                      ) : (
+                                                          <Volume2 size={12} className="text-zinc-400 group-hover/audio:text-white" />
+                                                      )}
+                                                  </button>
                                               </div>
                                               <p className="text-zinc-300 font-medium">"{scene.narration}"</p>
                                               <div className="bg-black/20 p-3 rounded-xl border border-white/5">
@@ -1017,7 +1352,13 @@ const App = () => {
                               ))}
                           </div>
                           
-                          <div className="mt-8 flex justify-end">
+                          <div className="mt-8 flex justify-end gap-4">
+                              <button 
+                                  onClick={handleNewProject}
+                                  className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white px-6 py-4 rounded-2xl font-bold text-lg flex items-center gap-2 transition-all border border-zinc-700 hover:border-zinc-500"
+                              >
+                                  <X size={20} /> Cancelar
+                              </button>
                               <button 
                                   onClick={startProduction}
                                   className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-2xl font-bold text-lg flex items-center gap-3 transition-all hover:scale-105 shadow-xl shadow-blue-900/20"
